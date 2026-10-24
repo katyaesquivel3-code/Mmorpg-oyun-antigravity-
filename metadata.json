@@ -1,0 +1,6 @@
+{
+  "name": "Ötüken",
+  "description": "Ötüken: Kut'un Dört Parçası - Zelda BotW tarzı Türk mitolojisi 3D açık dünya oyunu",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

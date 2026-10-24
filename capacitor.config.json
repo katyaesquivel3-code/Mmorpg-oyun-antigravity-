@@ -1,0 +1,13 @@
+{
+  "appId": "com.aistudio.otuken.game",
+  "appName": "Ötüken",
+  "webDir": "app/src/main/assets/web",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "backgroundColor": "#090d16",
+    "allowMixedContent": true
+  }
+}

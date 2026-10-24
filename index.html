@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>Ötüken: Kut'un Dört Parçası</title>
+  <link rel="icon" href="data:,">
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html, body {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background-color: #050811;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      color: #f1f5f9;
+      touch-action: none;
+    }
+
+    #canvasContainer {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+      background: #050811;
+    }
+
+    #gameCanvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      outline: none;
+      touch-action: none;
+    }
+
+    /* KUT ZAMANI SCREEN EFFECT (Golden slow-motion radiance vignette) */
+    #kutZamaniVignette {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 8;
+      pointer-events: none;
+      opacity: 0;
+      box-shadow: inset 0 0 80px 20px rgba(250, 204, 21, 0.45);
+      border: 3px solid rgba(250, 204, 21, 0.6);
+      transition: opacity 0.25s ease-out;
+    }
+
+    #kutZamaniVignette.active {
+      opacity: 1;
+      animation: kutGlowPulse 1.2s infinite alternate ease-in-out;
+    }
+
+    @keyframes kutGlowPulse {
+      0% { box-shadow: inset 0 0 60px 15px rgba(250, 204, 21, 0.35); }
+      100% { box-shadow: inset 0 0 110px 30px rgba(250, 204, 21, 0.65); }
+    }
+
+    /* BOW AIM CROSSHAIR */
+    #bowCrosshair {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 32px;
+      height: 32px;
+      z-index: 9;
+      pointer-events: none;
+      display: none;
+    }
+
+    #bowCrosshair::before, #bowCrosshair::after {
+      content: '';
+      position: absolute;
+      background: rgba(255, 255, 255, 0.85);
+      box-shadow: 0 0 4px #38bdf8;
+    }
+
+    #bowCrosshair::before {
+      top: 15px;
+      left: 0;
+      width: 32px;
+      height: 2px;
+    }
+
+    #bowCrosshair::after {
+      top: 0;
+      left: 15px;
+      width: 2px;
+      height: 32px;
+    }
+
+    /* LOCK-ON DIAMOND RETICLE */
+    #lockOnReticle {
+      position: absolute;
+      width: 36px;
+      height: 36px;
+      z-index: 9;
+      pointer-events: none;
+      display: none;
+      transform: translate(-50%, -50%) rotate(45deg);
+      border: 2px solid #facc15;
+      box-shadow: 0 0 10px rgba(250, 204, 21, 0.8);
+      transition: transform 0.08s ease-out;
+    }
+
+    /* DOM HUD OVERLAY */
+    #hudOverlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 10;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: env(safe-area-inset-top, 8px) env(safe-area-inset-right, 20px) env(safe-area-inset-bottom, 8px) env(safe-area-inset-left, 20px);
+    }
+
+    /* TOP BAR */
+    .top-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      width: 100%;
+      pointer-events: auto;
+    }
+
+    .player-bars {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      background: rgba(15, 23, 42, 0.88);
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      border-radius: 10px;
+      padding: 6px 10px;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+      min-width: 165px;
+    }
+
+    .bar-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+    }
+
+    .bar-track {
+      flex: 1;
+      height: 7px;
+      background: rgba(30, 41, 59, 0.8);
+      border-radius: 4px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .hp-fill {
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(90deg, #ef4444, #f87171);
+      transition: width 0.15s ease-out;
+    }
+
+    .sp-fill {
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(90deg, #10b981, #34d399);
+      transition: width 0.1s ease-out;
+    }
+
+    .arrow-badge {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      color: #facc15;
+      font-size: 11px;
+      font-weight: 800;
+      font-family: ui-monospace, monospace;
+      margin-top: 2px;
+    }
+
+    .center-info {
+      align-self: center;
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid rgba(250, 204, 21, 0.4);
+      border-radius: 20px;
+      padding: 4px 14px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #f8fafc;
+      letter-spacing: 0.5px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+      transition: all 0.2s ease;
+    }
+
+    .right-stat-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .stats-card {
+      background: rgba(15, 23, 42, 0.88);
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      border-radius: 10px;
+      padding: 4px 10px;
+      backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .stat-row {
+      font-family: ui-monospace, monospace;
+      font-size: 12px;
+      font-weight: 800;
+      color: #4ade80;
+    }
+
+    .stat-sub {
+      font-size: 10px;
+      color: #cbd5e1;
+      font-weight: 600;
+    }
+
+    .settings-btn {
+      background: rgba(15, 23, 42, 0.88);
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      border-radius: 8px;
+      padding: 5px 8px;
+      color: #38bdf8;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    /* BOTTOM CONTROLS ZONE */
+    .bottom-zone {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      width: 100%;
+      height: 160px;
+      position: relative;
+    }
+
+    /* LEFT JOYSTICK */
+    .joystick-region {
+      width: 130px;
+      height: 130px;
+      position: relative;
+      pointer-events: auto;
+      touch-action: none;
+      margin-left: 8px;
+      margin-bottom: 4px;
+    }
+
+    .joystick-base {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 104px;
+      height: 104px;
+      transform: translate(-50%, -50%);
+      background: radial-gradient(circle, rgba(56, 189, 248, 0.18) 0%, rgba(15, 23, 42, 0.7) 70%);
+      border: 2px solid rgba(56, 189, 248, 0.5);
+      border-radius: 50%;
+      box-shadow: 0 0 16px rgba(56, 189, 248, 0.25);
+    }
+
+    .joystick-thumb {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 44px;
+      height: 44px;
+      transform: translate(-50%, -50%);
+      background: linear-gradient(135deg, #38bdf8, #0284c7);
+      border: 2px solid #ffffff;
+      border-radius: 50%;
+      box-shadow: 0 3px 10px rgba(0, 0, 0, 0.5), 0 0 8px rgba(56, 189, 248, 0.7);
+      transition: transform 0.04s ease-out;
+      pointer-events: none;
+    }
+
+    /* BOTW COMBAT DIAMOND CLUSTER (Right screen layout) */
+    .combat-cluster {
+      position: relative;
+      width: 160px;
+      height: 155px;
+      pointer-events: auto;
+      margin-right: 12px;
+      margin-bottom: 4px;
+    }
+
+    /* Diamond Layout Buttons (Center = 80px, 78px) */
+    .btn-combat {
+      position: absolute;
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.95));
+      border: 1.5px solid rgba(56, 189, 248, 0.5);
+      color: #f8fafc;
+      font-size: 10px;
+      font-weight: 800;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      gap: 1px;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+
+    .btn-combat:active {
+      transform: scale(0.92);
+      border-color: #facc15;
+      background: linear-gradient(135deg, #0284c7, #0369a1);
+    }
+
+    /* Top: Kalkan (Shield / Parry) */
+    #btnShield {
+      top: 4px;
+      left: 56px;
+      border-color: #38bdf8;
+    }
+
+    /* Right: Yay (Bow & Arrow) */
+    #btnBow {
+      top: 54px;
+      left: 108px;
+      border-color: #4ade80;
+    }
+
+    /* Bottom: Roll (Dodge Roll) */
+    #btnRoll {
+      top: 104px;
+      left: 56px;
+      border-color: #facc15;
+    }
+
+    /* Left: Saldırı (Sword Attack / Charge) */
+    #btnAttack {
+      top: 54px;
+      left: 4px;
+      border-color: #f87171;
+    }
+
+    /* Utility action buttons beside diamond: Lock-on & Recenter */
+    .btn-util {
+      position: absolute;
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      background: rgba(15, 23, 42, 0.88);
+      border: 1.5px solid rgba(148, 163, 184, 0.4);
+      color: #cbd5e1;
+      font-size: 9px;
+      font-weight: 800;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      cursor: pointer;
+      box-shadow: 0 3px 8px rgba(0, 0, 0, 0.5);
+    }
+
+    #btnLockOn {
+      top: 10px;
+      left: 6px;
+      border-color: #facc15;
+      color: #facc15;
+    }
+
+    #recenterBtn {
+      top: 108px;
+      left: 6px;
+      border-color: #38bdf8;
+      color: #38bdf8;
+    }
+
+    /* Camera Touch Drag Surface */
+    #touchLookArea {
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 50%;
+      height: 100%;
+      z-index: 5;
+      pointer-events: auto;
+      touch-action: none;
+    }
+
+    /* Quality Modal */
+    #qualityModal {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 20;
+      background: rgba(5, 8, 17, 0.8);
+      backdrop-filter: blur(8px);
+      display: none;
+      justify-content: center;
+      align-items: center;
+      pointer-events: auto;
+    }
+
+    .modal-box {
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      border-radius: 14px;
+      padding: 18px 24px;
+      width: 90%;
+      max-width: 480px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
+    }
+
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 14px;
+    }
+
+    .modal-title {
+      font-size: 14px;
+      font-weight: 800;
+      color: #38bdf8;
+    }
+
+    .modal-close {
+      background: none;
+      border: none;
+      color: #94a3b8;
+      font-size: 18px;
+      cursor: pointer;
+    }
+
+    .quality-options {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .q-opt {
+      background: rgba(30, 41, 59, 0.8);
+      border: 1.5px solid rgba(148, 163, 184, 0.3);
+      border-radius: 8px;
+      padding: 10px;
+      cursor: pointer;
+    }
+
+    .q-opt-title {
+      font-size: 12px;
+      font-weight: 800;
+      margin-bottom: 2px;
+    }
+
+    .q-opt-desc {
+      font-size: 10px;
+      color: #94a3b8;
+    }
+  </style>
+</head>
+<body>
+  <div id="canvasContainer">
+    <canvas id="gameCanvas"></canvas>
+  </div>
+
+  <!-- Kut Zamanı Screen Effect -->
+  <div id="kutZamaniVignette"></div>
+
+  <!-- Bow Aim Crosshair -->
+  <div id="bowCrosshair"></div>
+
+  <!-- Lock-On Diamond Target Reticle -->
+  <div id="lockOnReticle"></div>
+
+  <!-- Camera touch drag -->
+  <div id="touchLookArea"></div>
+
+  <!-- DOM HUD Overlay -->
+  <div id="hudOverlay">
+    <div class="top-bar">
+      <!-- Player HP, Stamina & Ammo -->
+      <div class="player-bars">
+        <div class="bar-row">
+          <span style="color: #f87171;">CAN</span>
+          <div class="bar-track">
+            <div class="hp-fill" id="hpFill"></div>
+          </div>
+          <span id="hpValue" style="color: #f87171;">100</span>
+        </div>
+        <div class="bar-row">
+          <span style="color: #34d399;">SOLUK</span>
+          <div class="bar-track">
+            <div class="sp-fill" id="spFill"></div>
+          </div>
+          <span id="spValue" style="color: #34d399;">100</span>
+        </div>
+        <div class="arrow-badge">
+          <span>🏹 OK:</span>
+          <span id="arrowCount">30</span>
+          <span id="biomeDisplay" style="color: #38bdf8; margin-left: 6px; font-size: 9px;">YER-SUB</span>
+        </div>
+      </div>
+
+      <div class="center-info" id="statusMessage">
+        512x512m Açık Dünya &mdash; Dört Biyom
+      </div>
+
+      <div class="right-stat-group">
+        <div class="stats-card">
+          <div class="stat-row" id="fpsDisplay">-- FPS</div>
+          <div class="stat-sub" id="stateDisplay">BEKLEME</div>
+          <div class="stat-sub" id="vertDisplay">CHUNK: --</div>
+        </div>
+        <button class="settings-btn" id="qualityToggleBtn" title="Grafik Ayarları">
+          <span>KALİTE</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Bottom Controls -->
+    <div class="bottom-zone">
+      <!-- Virtual Joystick -->
+      <div class="joystick-region" id="joystickZone">
+        <div class="joystick-base" id="joystickBase">
+          <div class="joystick-thumb" id="joystickThumb"></div>
+        </div>
+      </div>
+
+      <!-- Zelda BotW Diamond Mobile Controls -->
+      <div class="combat-cluster">
+        <!-- Diamond: Top (Shield), Right (Bow), Bottom (Roll), Left (Attack) -->
+        <button class="btn-combat" id="btnShield" title="Kalkan (Basılı: Blok, Dokun: Parry)">
+          <span>KALKAN</span>
+          <span style="font-size: 7px; color: #38bdf8;">PARRY</span>
+        </button>
+
+        <button class="btn-combat" id="btnBow" title="Yay & Ok (Nişan)">
+          <span>YAY</span>
+          <span style="font-size: 7px; color: #4ade80;">NİŞAN</span>
+        </button>
+
+        <button class="btn-combat" id="btnRoll" title="Dodge Roll (Kaçış)">
+          <span>ROLL</span>
+          <span style="font-size: 7px; color: #facc15;">KAÇIŞ</span>
+        </button>
+
+        <button class="btn-combat" id="btnAttack" title="Kam Kılıcı (Kombo & Şarj)">
+          <span>KILIÇ</span>
+          <span style="font-size: 7px; color: #f87171;">VUR</span>
+        </button>
+
+        <!-- Utility buttons: Lock-on & Recenter -->
+        <button class="btn-util" id="btnLockOn" title="Kilitlen (En Yakın Düşman)">
+          <span>KİLİT</span>
+        </button>
+
+        <button class="btn-util" id="recenterBtn" title="Kamerayı Hizala">
+          <span>HİZALA</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quality Settings Modal -->
+  <div id="qualityModal">
+    <div class="modal-box">
+      <div class="modal-header">
+        <div class="modal-title">ÖTÜKEN GRAFİK KALİTE AYARLARI</div>
+        <button class="modal-close" id="closeQualityModal">&times;</button>
+      </div>
+      <div class="quality-options">
+        <div class="q-opt" id="qOptAuto">
+          <div class="q-opt-title">OTOMATİK (ÖNERİLEN)</div>
+          <div class="q-opt-desc">FPS 30 altına düşerse otomatik uyarlar.</div>
+        </div>
+        <div class="q-opt" id="qOptHigh">
+          <div class="q-opt-title">YÜKSEK KALİTE</div>
+          <div class="q-opt-desc">Tam çözünürlük, yoğun ağaçlar.</div>
+        </div>
+        <div class="q-opt" id="qOptMed">
+          <div class="q-opt-title">ORTA KALİTE</div>
+          <div class="q-opt-desc">60 FPS hedefli dengeli ayarlar.</div>
+        </div>
+        <div class="q-opt" id="qOptLow">
+          <div class="q-opt-title">DÜŞÜK KALİTE</div>
+          <div class="q-opt-desc">Düşük donanımlı cihazlar için hafif mod.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

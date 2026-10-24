@@ -1,0 +1,6 @@
+{
+  "summary":  "FAZ 3: Düşmanlar ve İlk Boss (Tepegöz) Kapsamlı Uygulama Planı.\nEnemyAI durum makinesi (görüş açısı, ses algısı, 2 saldırgan token slot koordinasyonu), prosedürel 3 düşman türü (Albız Ruhu, Kara Kış Gölgesi, Yek), ganimet sistemi (Can Meyvesi, Kut Tozu), Altay dağ eteğinde kesintisiz mağara arenası, 3 fazlı Tepegöz Boss savaşı (göz zayıf noktası, kaya fırlatma, öfke modu, sinematik geçişler, Kut Parçası 1 ödülü) ve DOM tabanlı Boss can göstergesi mimarisini içerir.",
+  "updatedAt":  "2026-10-24T08:28:44.176936869Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

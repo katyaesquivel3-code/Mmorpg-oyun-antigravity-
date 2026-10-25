@@ -144,6 +144,9 @@ export class HUD {
     this.tempWarning = document.getElementById('tempWarning');
 
     this.bossBarContainer = document.getElementById('bossBarContainer');
+    if (this.bossBarContainer) {
+      this.bossBarContainer.style.display = 'none';
+    }
     this.bossName = document.getElementById('bossName');
     this.bossHpFill = document.getElementById('bossHpFill');
     this.bossHpValue = document.getElementById('bossHpValue');
@@ -757,7 +760,7 @@ export class HUD {
     if (this.bossBarContainer && this.bossHpFill && this.bossHpValue) {
       if (combat.bossTepegoz && !combat.bossTepegoz.isDead) {
         const distToBoss = Vector3.Distance(player.position, combat.bossTepegoz.position);
-        if (distToBoss < 48.0) {
+        if (distToBoss < 32.0) {
           this.bossBarContainer.style.display = 'flex';
           const pct = Math.max(0, Math.min(100, (combat.bossTepegoz.health / combat.bossTepegoz.maxHealth) * 100));
           this.bossHpFill.style.width = `${pct}%`;

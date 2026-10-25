@@ -219,6 +219,11 @@ export class BossTepegoz {
     this.scratchToPlayer.z = playerPos.z - this.position.z;
     const dist = Math.hypot(this.scratchToPlayer.x, this.scratchToPlayer.z);
 
+    // Arena Dışı Emniyeti: Oyuncu Yer-Sub arenasından (40m) uzaktaysa saldırma ve takip etme
+    if (dist > 40.0) {
+      return { isAttacking: false, attackType: 'NONE', damage: 0 };
+    }
+
     // ================= KÖR OLUP DİZ ÇÖKME DURUMU =================
     if (this.phase === 'KNEELING_BLIND') {
       this.kneelTimer -= deltaTime;

@@ -652,8 +652,11 @@ export class SaveSystem {
     sky?: SkySystem,
     weather?: WeatherSystem
   ): void {
-    // 1. Oyuncu Konum & İstatistikleri
-    player.position.set(data.player.posX, data.player.posY, data.player.posZ);
+    // 1. Oyuncu Konum & İstatistikleri (Yeraltına düşmeyi önleyen zemin emniyeti)
+    const groundHeight = world.getHeightAt(data.player.posX, data.player.posZ);
+    const validY = Math.max(groundHeight, data.player.posY);
+    player.position.set(data.player.posX, validY, data.player.posZ);
+    player.locomotionState = 'GROUND';
     player.headingAngle = data.player.heading;
     player.model.root.position.copyFrom(player.position);
     player.model.root.rotation.y = player.headingAngle;

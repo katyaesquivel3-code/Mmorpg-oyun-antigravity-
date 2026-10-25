@@ -165,10 +165,25 @@ export class WorldNoise {
    * Verilen koordinatlardaki biyom özelliklerini döndürür
    */
   public getBiome(x: number, z: number, height?: number): BiomeData {
+    // 0. Ötüken Obası (Merkez yayla ve Bay Terek kutsal obası)
+    const distFromOrigin = Math.hypot(x, z);
+    if (distFromOrigin < 36.0) {
+      return {
+        type: 'YER_SUB',
+        name: 'Ötüken Obası',
+        subTitle: 'Kutlu Yurt ve Bay Terek Ocağı',
+        grassColor: [0.28, 0.72, 0.32],
+        rockColor: [0.45, 0.45, 0.40],
+        ambientFogColor: [0.55, 0.78, 0.95],
+        foliageDensity: 0.85,
+        weatherType: 'CLEAR'
+      };
+    }
+
     const h = height !== undefined ? height : this.getHeight(x, z);
 
     // 1. Şahmaran Gölü (Batı çanağı ve kıyı şeridi)
-    if (h < WorldNoise.WATER_LEVEL + 1.4 && x < 40 && z < 90) {
+    if (h < WorldNoise.WATER_LEVEL + 1.4 && x < -25 && z < 60) {
       return {
         type: 'SAHMARAN',
         name: 'Şahmaran Gölü',

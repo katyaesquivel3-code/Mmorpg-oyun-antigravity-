@@ -54,6 +54,7 @@ export class AdaptiveQualitySystem {
   private readonly HISTORY_SIZE = 60;
   private highFrameTimeDuration = 0.0;
   private readonly THERMAL_THROTTLE_THRESHOLD_S = 30.0; // 30 sn aralıksız yüksek kare süresi
+  private startupGraceTimer = 10.0; // İlk açılış ve shader derleme sürecinde erken termal tetiklemeyi önleyen 10 sn hoşgörü süresi
 
   // Enstrümantasyon (SceneInstrumentation & EngineInstrumentation)
   public sceneInstrumentation: SceneInstrumentation;
@@ -302,10 +303,19 @@ export class AdaptiveQualitySystem {
    * Her Kare Çalışan Uyarlanabilir Performans ve Termal Denetçi (Sıcak Döngü & Sıfır GC)
    */
   public update(deltaTime: number): PerformanceStats {
-    const frameMs = deltaTime * 1000.0;
+    const safeDelta = Math.min(0.05, Math.max(0.001, deltaTime));
+    const frameMs = safeDelta * 1000.0;
     this.frameTimeHistory.push(frameMs);
     if (this.frameTimeHistory.length > this.HISTORY_SIZE) {
       this.frameTimeHistory.shift();
+    }
+
+    // Başlangıç ısınma koruması (İlk 10 saniye boyunca sahneler yüklenirken termal kısma tetiklenmez)
+    if (this.startupGraceTimer > 0) {
+      this.startupGraceTimer -= safeDelta;
+      this.stats.fps = Math.round(this.engine.getFps());
+      this.stats.frameTimeMs = Math.round(frameMs * 10) / 10;
+      return this.stats;
     }
 
     // Hareketli Ortalama Kare Süresi (Moving Average)
@@ -317,7 +327,7 @@ export class AdaptiveQualitySystem {
 
     // Termal Stres ve Aşırı Kare Süresi Takibi
     if (avgFrameTime > 25.0) {
-      this.highFrameTimeDuration += deltaTime;
+      this.highFrameTimeDuration += safeDelta;
       if (this.highFrameTimeDuration > this.THERMAL_THROTTLE_THRESHOLD_S && !this.isThermalThrottled) {
         this.isThermalThrottled = true;
         this.stats.isThermalThrottled = true;
@@ -326,7 +336,7 @@ export class AdaptiveQualitySystem {
         EventBus.emit('ui:loot_toast', { text: '❄️ Termal Emniyet Devrede: Cihaz sıcaklığını korumak için 30 FPS optimize edildi.' });
       }
     } else {
-      this.highFrameTimeDuration = Math.max(0, this.highFrameTimeDuration - deltaTime * 0.5);
+      this.highFrameTimeDuration = Math.max(0, this.highFrameTimeDuration - safeDelta * 0.5);
     }
 
     // İstatistikleri Güncelle

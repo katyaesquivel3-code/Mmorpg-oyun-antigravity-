@@ -202,7 +202,9 @@ export class OpeningCutscene {
       this.letterboxBottom.classList.remove('active');
     }
 
-    // Kamerayı oyuncuya yumuşakça hizala
+    // Kamerayı ve karakteri zemine yumuşakça hizala
+    const groundY = this.world.getHeightAt(this.ayaz.root.position.x, this.ayaz.root.position.z);
+    this.ayaz.root.position.y = groundY;
     this.cameraRig.recenter(this.ayaz.root.rotation.y);
 
     // İlk ana görevi başlat: Kül Olan Oba

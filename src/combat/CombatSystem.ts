@@ -302,35 +302,45 @@ export class CombatSystem {
     // Düşmanların ve Kuklaların Güncellenmesi
     this.updateEnemies(deltaTime, playerPos, world, footstepRadius, isCamouflaged, isNight);
 
-    // Boss Tepegöz Güncellemesi & Saldırı Karşılama
+    // Boss Tepegöz Güncellemesi & Saldırı Karşılama (Arena: 0, -135)
     if (this.bossTepegoz && !this.bossTepegoz.isDead) {
-      const bossResult = this.bossTepegoz.update(playerPos, world, deltaTime);
-      if (bossResult.isAttacking && bossResult.damage > 0) {
-        const bossDist = Vector3.Distance(playerPos, this.bossTepegoz.position);
-        if (bossDist < 6.5) {
-          this.handleIncomingEnemyAttack(this.bossTepegoz.position, bossResult.damage, playerPos, undefined, true);
+      const bossDist = Vector3.Distance(playerPos, this.bossTepegoz.position);
+      if (bossDist < 48.0) {
+        const bossResult = this.bossTepegoz.update(playerPos, world, deltaTime);
+        if (bossResult.isAttacking && bossResult.damage > 0) {
+          if (bossDist < 6.5) {
+            this.handleIncomingEnemyAttack(this.bossTepegoz.position, bossResult.damage, playerPos, undefined, true);
+          }
         }
       }
     }
 
-    // Boss Demir Dağ Bekçisi Güncellemesi
+    // Boss Demir Dağ Bekçisi Güncellemesi (Arena: 160, 35)
     if (this.bossDemirDag && !this.bossDemirDag.isDead) {
-      this.bossDemirDag.update(deltaTime, playerPos, this);
+      if (Vector3.Distance(playerPos, this.bossDemirDag.position) < 55.0) {
+        this.bossDemirDag.update(deltaTime, playerPos, this);
+      }
     }
 
-    // Boss Şahmaran Güncellemesi
+    // Boss Şahmaran Güncellemesi (Arena: -130, -45)
     if (this.bossSahmaran && !this.bossSahmaran.isDead) {
-      this.bossSahmaran.update(deltaTime, playerPos, this);
+      if (Vector3.Distance(playerPos, this.bossSahmaran.position) < 55.0) {
+        this.bossSahmaran.update(deltaTime, playerPos, this);
+      }
     }
 
-    // Boss 7 Başlı Yelbegen Güncellemesi
+    // Boss 7 Başlı Yelbegen Güncellemesi (Arena: -130, -45)
     if (this.bossYelbegen && !this.bossYelbegen.isDead) {
-      this.bossYelbegen.update(deltaTime, playerPos, this);
+      if (Vector3.Distance(playerPos, this.bossYelbegen.position) < 55.0) {
+        this.bossYelbegen.update(deltaTime, playerPos, this);
+      }
     }
 
-    // Boss Erlik Han Güncellemesi
+    // Boss Erlik Han Güncellemesi (Arena: 450, -72)
     if (this.bossErlikHan && !this.bossErlikHan.isDead) {
-      this.bossErlikHan.update(deltaTime, playerPos, this);
+      if (Vector3.Distance(playerPos, this.bossErlikHan.position) < 55.0) {
+        this.bossErlikHan.update(deltaTime, playerPos, this);
+      }
     }
 
     // Kampların ve Kara Totemlerin Güncellenmesi

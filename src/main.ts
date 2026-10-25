@@ -612,6 +612,7 @@ window.addEventListener('DOMContentLoaded', () => {
   // Başlangıç Konumlandırması: Yer-Sub başlangıç platosu (Ötüken Obası önü, x: 0, z: 0)
   const initialGroundHeight = world.getHeightAt(0, 0);
   player.position.set(0, initialGroundHeight, 0);
+  player.locomotionState = 'GROUND';
   ayaz.root.position.copyFrom(player.position);
   cameraRig.recenter(player.headingAngle);
 

@@ -217,6 +217,8 @@ export class BossErlikHan {
     this.animTimer += deltaTime;
 
     const distToPlayer = Vector3.Distance(playerPos, this.root.position);
+    // Dokuz Kat Yeraltı Taht Odası Emniyeti: Oyuncu arenadan uzaktaysa saldırı tetikleme
+    if (distToPlayer > 45.0) return;
 
     // Yüzünü Oyuncuya Dön
     if (!this.isKneeling) {

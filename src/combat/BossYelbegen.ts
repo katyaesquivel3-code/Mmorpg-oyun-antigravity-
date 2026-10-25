@@ -262,6 +262,9 @@ export class BossYelbegen {
     this.scratchDir.y = 0;
     const distToPlayer = this.scratchDir.length();
 
+    // Şahmaran Gölü Derinlikleri Emniyeti: Oyuncu su altı arenasında değilse saldırı tetikleme
+    if (distToPlayer > 45.0) return;
+
     if (distToPlayer > 0.5) {
       const targetAngle = Math.atan2(this.scratchDir.x, this.scratchDir.z);
       this.currentHeading = Scalar.Lerp(this.currentHeading, targetAngle, Math.min(1.0, deltaTime * 1.8));

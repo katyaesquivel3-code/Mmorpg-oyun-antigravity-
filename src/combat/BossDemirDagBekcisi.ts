@@ -532,6 +532,9 @@ export class BossDemirDagBekcisi {
     this.scratchToPlayer.y = 0;
     const distToPlayer = this.scratchToPlayer.length();
 
+    // Demir Dağ Kor Ocağı Emniyeti: Oyuncu arenadan uzaktaysa saldırı tetikleme
+    if (distToPlayer > 45.0) return;
+
     if (distToPlayer > 0.01) {
       const targetHeading = Math.atan2(this.scratchToPlayer.x, this.scratchToPlayer.z);
       this.heading = Scalar.Lerp(this.heading, targetHeading, deltaTime * 2.5);

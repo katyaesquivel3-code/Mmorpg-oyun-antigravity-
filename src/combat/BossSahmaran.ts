@@ -474,6 +474,9 @@ export class BossSahmaran {
     this.scratchDir.y = 0;
     const distToPlayer = this.scratchDir.length();
 
+    // Şahmaran Gölü Su Mabedi Emniyeti: Oyuncu arenadan uzaktaysa saldırı tetikleme
+    if (distToPlayer > 45.0) return;
+
     if (distToPlayer > 0.1) {
       const targetAngle = Math.atan2(this.scratchDir.x, this.scratchDir.z);
       this.currentHeading = Scalar.Lerp(this.currentHeading, targetAngle, Math.min(1.0, deltaTime * 2.5));

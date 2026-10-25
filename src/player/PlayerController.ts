@@ -139,7 +139,9 @@ export class PlayerController {
 
     this.currentGroundHeight = world.getHeightAt(this.position.x, this.position.z);
     const inTrainingPool = this.trainingGround ? this.trainingGround.isInTrainingPool(this.position) : false;
-    this.isInWater = this.position.y < (WorldNoise.WATER_LEVEL - 0.35) || inTrainingPool;
+    // Su tespiti: Yalnızca zemin su seviyesinin altındaysa veya yapay su havuzundaysa suya girilebilir (Kuru yaylada yeraltına düşmeyi önler)
+    const isGroundSubmerged = this.currentGroundHeight < (WorldNoise.WATER_LEVEL - 0.15);
+    this.isInWater = (isGroundSubmerged && this.position.y < (WorldNoise.WATER_LEVEL + 0.15)) || inTrainingPool;
 
     // Islaklık kuruma döngüsü
     if (this.isInWater) {
@@ -579,6 +581,7 @@ export class PlayerController {
       this.locomotionState = 'GROUND';
       this.isDiving = false;
       this.oxygen = this.MAX_OXYGEN;
+      this.position.y = this.currentGroundHeight;
       return;
     }
 

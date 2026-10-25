@@ -184,7 +184,9 @@ export class Game {
 
   public startRenderLoop(onUpdate: (deltaTime: number) => void): void {
     this.engine.runRenderLoop(() => {
-      const dt = this.engine.getDeltaTime() / 1000;
+      const rawDt = this.engine.getDeltaTime() / 1000;
+      // İlk kare yükleme veya takılma sırasında aşırı delta sıçramalarını önlemek için 0.001 - 0.05 sn arasına kırp (Zero GC)
+      const dt = Math.min(0.05, Math.max(0.001, rawDt));
       onUpdate(dt);
       this.scene.render();
     });

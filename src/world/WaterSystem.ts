@@ -1,3 +1,9 @@
+/**
+ * ÖTÜKEN: KUT'UN DÖRT PARÇASI
+ * Şahmaran Gölü Su Sistemi & Su Altı Kamera Efekti (WaterSystem)
+ * (GLSL Gerstner Dalgaları, Fresnel Yansıması, Kıyı Köpüğü, Su Altı Sisi & Sahte Caustics)
+ */
+
 import {
   Mesh,
   MeshBuilder,
@@ -12,10 +18,18 @@ import { WorldNoise } from './WorldNoise';
 export class WaterSystem {
   public mesh: Mesh;
   private material: ShaderMaterial;
+  private scene: Scene;
   private time = 0;
 
+  // Su Altı Durumu
+  public isUnderwater = false;
+  private underwaterOverlay: HTMLElement | null = null;
+  private savedFogDensity = 0.005;
+  private savedFogColor = new Color3(0.65, 0.82, 0.95);
+
   constructor(scene: Scene) {
-    // Register custom GLSL shaders in Babylon's ShaderStore
+    this.scene = scene;
+
     Effect.ShadersStore['otukenWaterVertexShader'] = `
       precision highp float;
 
@@ -30,23 +44,25 @@ export class WaterSystem {
       varying vec3 vPositionW;
       varying vec3 vNormalW;
       varying vec2 vUV;
+      varying float vWaveHeight;
 
       void main(void) {
         vUV = uv;
         vec3 pos = position;
 
-        // Gerstner wave displacement
-        float wave1 = sin(pos.x * 0.25 + time * 1.8) * 0.08;
-        float wave2 = cos(pos.z * 0.35 + time * 1.4) * 0.06;
-        float wave3 = sin((pos.x + pos.z) * 0.15 + time * 2.2) * 0.04;
+        // Gerstner Çift Dalga Deplasmanı
+        float wave1 = sin(pos.x * 0.22 + time * 1.8) * 0.09;
+        float wave2 = cos(pos.z * 0.32 + time * 1.4) * 0.07;
+        float wave3 = sin((pos.x + pos.z) * 0.16 + time * 2.2) * 0.05;
         pos.y += wave1 + wave2 + wave3;
+        vWaveHeight = pos.y;
 
         vec4 worldPos = world * vec4(pos, 1.0);
         vPositionW = worldPos.xyz;
 
-        // Approximate wave normal
-        float dX = cos(pos.x * 0.25 + time * 1.8) * 0.25 * 0.08;
-        float dZ = -sin(pos.z * 0.35 + time * 1.4) * 0.35 * 0.06;
+        // Dalga Normal Türevi
+        float dX = cos(pos.x * 0.22 + time * 1.8) * 0.22 * 0.09;
+        float dZ = -sin(pos.z * 0.32 + time * 1.4) * 0.32 * 0.07;
         vec3 waveNormal = normalize(vec3(-dX, 1.0, -dZ));
         vNormalW = normalize((world * vec4(waveNormal, 0.0)).xyz);
 
@@ -66,27 +82,28 @@ export class WaterSystem {
       varying vec3 vPositionW;
       varying vec3 vNormalW;
       varying vec2 vUV;
+      varying float vWaveHeight;
 
       void main(void) {
         vec3 viewDir = normalize(cameraPosition - vPositionW);
         vec3 normal = normalize(vNormalW);
 
-        // Fresnel term: shallow looking down, reflective at glancing angles
+        // Fresnel Kırılımı: Dik bakışta göl derinliği, teğet bakışta gökyüzü yansıması
         float fresnel = clamp(1.0 - dot(viewDir, normal), 0.0, 1.0);
-        fresnel = pow(fresnel, 2.8);
+        fresnel = pow(fresnel, 2.6);
 
-        // Procedural caustics & shore ripples
-        float foamPattern = sin(vPositionW.x * 0.8 + time * 2.0) * cos(vPositionW.z * 0.8 + time * 2.0);
-        float foam = step(0.72, foamPattern) * 0.25;
+        // Kıyı Köpüğü ve Kaustik Dalga Paterni
+        float foamPattern = sin(vPositionW.x * 0.85 + time * 2.2) * cos(vPositionW.z * 0.85 + time * 1.9);
+        float foam = step(0.72, foamPattern) * 0.32;
 
-        // Sun specular glint
+        // Güneş Yansıması (Specular Glint)
         vec3 halfVec = normalize(viewDir + normalize(sunDirection));
-        float spec = pow(max(0.0, dot(normal, halfVec)), 64.0) * 0.6;
+        float spec = pow(max(0.0, dot(normal, halfVec)), 64.0) * 0.7;
 
         vec3 waterCol = mix(deepColor, shallowColor, fresnel * 0.85);
         waterCol += vec3(foam) + vec3(spec);
 
-        gl_FragColor = vec4(waterCol, 0.82);
+        gl_FragColor = vec4(waterCol, 0.86);
       }
     `;
 
@@ -104,21 +121,58 @@ export class WaterSystem {
       }
     );
 
-    // Deep turquoise to sparkling teal (Zelda BotW water look)
-    this.material.setColor3('deepColor', new Color3(0.02, 0.28, 0.42));
-    this.material.setColor3('shallowColor', new Color3(0.18, 0.72, 0.75));
+    this.material.setColor3('deepColor', new Color3(0.02, 0.22, 0.38));
+    this.material.setColor3('shallowColor', new Color3(0.18, 0.75, 0.78));
     this.material.setVector3('sunDirection', new Vector3(0.5, 0.8, 0.3));
 
-    // Create a 220x220m water plane over the lake basin (SW quadrant)
-    this.mesh = MeshBuilder.CreateGround('sahmaranWater', { width: 220, height: 220, subdivisions: 28 }, scene);
-    this.mesh.position.set(-90, WorldNoise.WATER_LEVEL, -90);
+    // 280x280m Genişletilmiş Göl Düzlemi (Batı Havzası)
+    this.mesh = MeshBuilder.CreateGround('sahmaranWater', { width: 280, height: 280, subdivisions: 32 }, scene);
+    this.mesh.position.set(-130, WorldNoise.WATER_LEVEL, -40);
     this.mesh.material = this.material;
     this.mesh.isPickable = false;
+
+    // DOM Su Altı Efekt Katmanı
+    this.underwaterOverlay = document.getElementById('underwaterCausticOverlay');
   }
 
-  public update(deltaTime: number, sunDir: Vector3): void {
+  /**
+   * Her kare su dalgalarını ve su altı kamera durumunu günceller
+   */
+  public update(deltaTime: number, sunDir: Vector3, cameraPos: Vector3): void {
     this.time += deltaTime;
     this.material.setFloat('time', this.time);
     this.material.setVector3('sunDirection', sunDir);
+    this.material.setVector3('cameraPosition', cameraPos);
+
+    // Su Altı Kamera Tespiti
+    const isCameraUnder = cameraPos.y < WorldNoise.WATER_LEVEL && cameraPos.x < 30 && cameraPos.z < 110;
+
+    if (isCameraUnder && !this.isUnderwater) {
+      // Su Altına Giriş
+      this.isUnderwater = true;
+      this.savedFogDensity = this.scene.fogDensity;
+      this.savedFogColor.copyFrom(this.scene.fogColor);
+
+      this.scene.fogDensity = 0.075;
+      this.scene.fogColor.set(0.02, 0.26, 0.38); // Kutsal turkuaz su altı sisi
+
+      if (this.underwaterOverlay) {
+        this.underwaterOverlay.style.display = 'block';
+      }
+    } else if (!isCameraUnder && this.isUnderwater) {
+      // Su Yüzeyine Çıkış
+      this.isUnderwater = false;
+      this.scene.fogDensity = this.savedFogDensity;
+      this.scene.fogColor.copyFrom(this.savedFogColor);
+
+      if (this.underwaterOverlay) {
+        this.underwaterOverlay.style.display = 'none';
+      }
+    }
+  }
+
+  public dispose(): void {
+    this.mesh.dispose();
+    this.material.dispose();
   }
 }

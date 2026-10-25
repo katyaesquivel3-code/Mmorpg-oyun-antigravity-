@@ -20,6 +20,7 @@
             android:exported="true"
             android:label="@string/app_name"
             android:screenOrientation="sensorLandscape"
+            android:windowLayoutInDisplayCutoutMode="shortEdges"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:theme="@style/Theme.MyApplication">
             <intent-filter>

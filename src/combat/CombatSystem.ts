@@ -1,65 +1,90 @@
+/**
+ * ÖTÜKEN: KUT'UN DÖRT PARÇASI
+ * Gelişmiş Savaş Sistemi (CombatSystem)
+ * (Düşman Koordinatörü, 4 Düşman Türü, Kara Totem & Kamplar, Kara Kış Kirlenmesi,
+ *  Ganimet Sistemi, Boss Tepegöz 3 Faz & Zayıf Noktalar, Telegraph & Sıfır GC)
+ */
+
 import {
   Scene,
   Vector3,
   Color4,
   ParticleSystem,
-  Texture,
   TransformNode,
-  Mesh,
-  MeshBuilder,
-  StandardMaterial,
-  Color3,
   Scalar
 } from '@babylonjs/core';
 import { TrainingDummy, DummyAttackEvent } from './TrainingDummy';
+import { EnemyEntity } from './EnemyEntity';
+import { BossTepegoz } from './BossTepegoz';
+import { BossDemirDagBekcisi } from './BossDemirDagBekcisi';
+import { BossSahmaran } from './BossSahmaran';
+import { BossYelbegen } from './BossYelbegen';
+import { BossErlikHan } from './BossErlikHan';
+import { EnemyCampManager } from '../world/EnemyCampManager';
+import { WinterBlightManager } from '../world/WinterBlightManager';
+import { LootManager, LootType } from './LootManager';
+import { EnemyCoordinator } from './EnemyCoordinator';
 import { ArrowSystem } from './ArrowSystem';
 import { DamageNumberManager } from './DamageNumberManager';
 import { WorldManager } from '../world/WorldManager';
+import { ProceduralAudio } from '../audio/ProceduralAudio';
+import { EventBus } from '../infra/EventBus';
+import { SettingsStore } from '../infra/SettingsStore';
+import { ElementSystem } from '../elements/ElementSystem';
+import { KamPowerManager } from '../powers/KamPowerManager';
+import { InventoryManager } from '../inventory/InventoryManager';
+import {
+  WeaponType,
+  DamageType,
+  ArrowType,
+  WEAPON_DEFINITIONS,
+  ARROW_DEFINITIONS
+} from './WeaponData';
+import { AyazAnimState } from '../player/AyazModel';
 
-export type CombatActionState =
-  | 'IDLE'
-  | 'ATTACK_1'
-  | 'ATTACK_2'
-  | 'ATTACK_3'
-  | 'CHARGE_WINDUP'
-  | 'CHARGE_ATTACK'
-  | 'DODGE_ROLL'
-  | 'SHIELD_BLOCK'
-  | 'PARRY'
-  | 'BOW_AIM'
-  | 'BOW_SHOOT'
-  | 'HURT';
+export type CombatActionState = AyazAnimState;
 
 export class CombatSystem {
   public scene: Scene;
   public arrowSystem: ArrowSystem;
   public damageNumbers: DamageNumberManager;
+  public coordinator: EnemyCoordinator;
+  public lootManager: LootManager;
 
-  // Player Combat Attributes
+  // Oyuncu Savaş Nitelikleri
   public maxHealth = 100;
   public health = 100;
   public maxStamina = 100;
   public stamina = 100;
-  public staminaRegenRate = 28.0; // /sec
+  public staminaRegenRate = 28.0;
   private staminaRegenCooldown = 0;
 
-  // Active Combat State
+  // Silah Yönetimi (Kam Kılıcı, Savaş Baltası, Kargı)
+  public activeWeapon: WeaponType = 'KAM_SWORD';
+
+  // Aktif Savaş Durum Makinesi
   public actionState: CombatActionState = 'IDLE';
   public actionTimer = 0;
   public comboWindowTimer = 0;
-  public comboStep = 0; // 0=None, 1=First, 2=Second, 3=Third
+  public comboStep = 0;
 
-  // Charge Attack
+  // Flurry Rush (Kut Saldırı Yağmuru)
+  public isFlurryRush = false;
+  public flurryStep = 0;
+  public flurryTimer = 0;
+  public readonly FLURRY_TOTAL_HITS = 5;
+
+  // Şarjlı Saldırı
   public isCharging = false;
   public chargeHoldTime = 0;
   public readonly MIN_CHARGE_TIME = 0.55;
 
-  // Parry & Block Timing
+  // Kalkan & Parry (0.20 sn)
   public isShieldRaised = false;
   public parryWindowTimer = 0;
-  public readonly PARRY_WINDOW = 0.20; // 0.2s parry frame window
+  public readonly PARRY_WINDOW = 0.20;
 
-  // Dodge & Kut Zamanı
+  // Kaçış & Kut Zamanı (%20 Hız, 3.0 sn)
   public isRolling = false;
   public rollTimer = 0;
   public readonly ROLL_DURATION = 0.45;
@@ -68,38 +93,51 @@ export class CombatSystem {
   public kutZamaniTimer = 0;
   public readonly KUT_ZAMANI_DURATION = 3.0;
 
-  // Lock-On Target
-  public lockedTarget: TrainingDummy | null = null;
-  public dummies: TrainingDummy[] = [];
+  // Havada Bullet-Time Yay Nişanı (%20 Hız)
+  public isAirborneAim = false;
+  public bulletTimeScale = 1.0;
 
-  // Hit-Stop Micro-freeze (60-90ms)
+  // Kilitlenme, Düşmanlar, Boss ve Kamplar
+  public lockedTarget: { position: Vector3 } | null = null;
+  public dummies: TrainingDummy[] = [];
+  public enemies: EnemyEntity[] = [];
+  public bossTepegoz: BossTepegoz | null = null;
+  public bossDemirDag: BossDemirDagBekcisi | null = null;
+  public bossSahmaran: BossSahmaran | null = null;
+  public bossYelbegen: BossYelbegen | null = null;
+  public bossErlikHan: BossErlikHan | null = null;
+  public campManager: EnemyCampManager | null = null;
+  public blightManager: WinterBlightManager | null = null;
+
+  // Hit-Stop Mikro-Donma
   public playerHitStopTimer = 0;
 
-  // Camera Trauma / Shake
+  // Kamera Sarsıntısı
   public cameraShakeTrauma = 0;
   public cameraShakeOffset = new Vector3(0, 0, 0);
 
-  // Sparks Particle System (Pure procedural color / vertex particles)
+  // Parçacık Sistemi
   private sparkSystem: ParticleSystem | null = null;
   private sparkEmitter: TransformNode;
 
-  // Root Motion displacement vector for current frame
+  // Root Motion Ofseti
   public rootMotionOffset = new Vector3(0, 0, 0);
 
-  // Sword Trail Node
-  public swordTipPos = new Vector3(0, 0, 0);
+  // Sıcak döngü scratch nesneleri (Zero GC)
+  private scratchDamagePos = new Vector3(0, 0, 0);
+  private scratchHitNormal = new Vector3(0, 0, 0);
 
   constructor(scene: Scene, world: WorldManager) {
     this.scene = scene;
     this.arrowSystem = new ArrowSystem(scene);
     this.damageNumbers = new DamageNumberManager(scene);
+    this.coordinator = EnemyCoordinator.getInstance();
+    this.lootManager = new LootManager(scene);
 
-    // Emitter node for spark particles
     this.sparkEmitter = new TransformNode('spark_emitter', scene);
     this.initSparks();
 
-    // Spawn 3 stationary dummies and 1 attacking dummy ("Usta Kukla")
-    // Form a circle in the Yer-Sub starting clearing near (x: 0, z: 12)
+    // 1. Kamp Alanı Talim Kuklaları
     const dummyPositions = [
       { id: '1', name: 'Talim Kuklası I', x: -3.5, z: 12.0, attacker: false },
       { id: '2', name: 'Talim Kuklası II', x: 0.0, z: 15.0, attacker: false },
@@ -107,43 +145,29 @@ export class CombatSystem {
       { id: '4', name: 'Usta Kukla (Saldıran)', x: 0.0, z: 8.5, attacker: true }
     ];
 
-    for (const d of dummyPositions) {
-      const dummy = new TrainingDummy(
-        d.id,
-        d.name,
-        new Vector3(d.x, 0, d.z),
-        d.attacker,
-        scene,
-        world
-      );
+    for (let i = 0; i < dummyPositions.length; i++) {
+      const d = dummyPositions[i];
+      const dummy = new TrainingDummy(d.id, d.name, new Vector3(d.x, 0, d.z), d.attacker, scene, world);
       this.dummies.push(dummy);
     }
   }
 
   private initSparks(): void {
-    const ps = new ParticleSystem('sparks', 100, this.scene);
-    // Use procedural particle buffer with warm sparks
-    ps.emitter = this.sparkEmitter;
-    ps.minEmitBox = new Vector3(-0.1, -0.1, -0.1);
-    ps.maxEmitBox = new Vector3(0.1, 0.1, 0.1);
-
-    ps.color1 = new Color4(1.0, 0.9, 0.3, 1.0); // Bright gold
-    ps.color2 = new Color4(1.0, 0.4, 0.1, 1.0); // Spark orange
-    ps.colorDead = new Color4(0.4, 0.1, 0.0, 0.0);
-
-    ps.minSize = 0.08;
+    const ps = new ParticleSystem('hit_sparks', 180, this.scene);
+    ps.emitter = this.sparkEmitter as unknown as Vector3;
+    ps.minEmitBox = new Vector3(-0.15, -0.15, -0.15);
+    ps.maxEmitBox = new Vector3(0.15, 0.15, 0.15);
+    ps.color1 = new Color4(1.0, 0.88, 0.35, 1.0);
+    ps.color2 = new Color4(0.95, 0.45, 0.1, 0.9);
+    ps.colorDead = new Color4(0.3, 0.1, 0.05, 0.0);
+    ps.minSize = 0.05;
     ps.maxSize = 0.18;
-    ps.minLifeTime = 0.15;
-    ps.maxLifeTime = 0.35;
-    ps.emitRate = 0; // Manual burst
-
+    ps.minLifeTime = 0.08;
+    ps.maxLifeTime = 0.22;
+    ps.emitRate = 0;
     ps.gravity = new Vector3(0, -9.81, 0);
-    ps.direction1 = new Vector3(-2, 2, -2);
-    ps.direction2 = new Vector3(2, 4, 2);
-    ps.minEmitPower = 3;
-    ps.maxEmitPower = 7;
-    ps.updateSpeed = 0.02;
-
+    ps.minEmitPower = 2.5;
+    ps.maxEmitPower = 5.5;
     ps.start();
     this.sparkSystem = ps;
   }
@@ -154,593 +178,1238 @@ export class CombatSystem {
     this.sparkSystem.manualEmitCount = count;
   }
 
-  /**
-   * Triggers a Camera Trauma Shake (e.g. 0.4 = medium hit, 0.8 = heavy spin or parry)
-   */
   public addCameraTrauma(amount: number): void {
     this.cameraShakeTrauma = Math.min(1.0, this.cameraShakeTrauma + amount);
   }
 
-  // ===================== PLAYER COMBAT COMMANDS =====================
-
-  /**
-   * Attack button pressed (Kam Kılıcı)
-   */
-  public triggerAttack(isCharged = false): boolean {
-    if (this.actionState === 'DODGE_ROLL' || this.actionState === 'HURT') return false;
-
-    // Check stamina
-    const stamCost = isCharged ? 30 : 12;
-    if (this.stamina < stamCost) return false;
-
-    this.stamina -= stamCost;
-    this.staminaRegenCooldown = 0.8;
-
-    if (isCharged) {
-      this.actionState = 'CHARGE_ATTACK';
-      this.actionTimer = 0;
-      this.comboStep = 0;
-      this.comboWindowTimer = 0;
-      return true;
-    }
-
-    // 3-hit combo sequence
-    if (this.comboWindowTimer > 0 && this.comboStep === 1) {
-      // Step 2
-      this.comboStep = 2;
-      this.actionState = 'ATTACK_2';
-      this.actionTimer = 0;
-      this.comboWindowTimer = 0;
-    } else if (this.comboWindowTimer > 0 && this.comboStep === 2) {
-      // Step 3 (Finisher)
-      this.comboStep = 3;
-      this.actionState = 'ATTACK_3';
-      this.actionTimer = 0;
-      this.comboWindowTimer = 0;
-    } else {
-      // Step 1
-      this.comboStep = 1;
-      this.actionState = 'ATTACK_1';
-      this.actionTimer = 0;
-      this.comboWindowTimer = 0;
-    }
-
-    return true;
+  public registerBoss(boss: BossTepegoz): void {
+    this.bossTepegoz = boss;
   }
 
-  /**
-   * Attack button held down for charged spin
-   */
-  public startCharge(): void {
-    if (this.actionState === 'DODGE_ROLL' || this.actionState === 'HURT') return;
-    if (this.stamina < 30) return;
-    this.isCharging = true;
-    this.chargeHoldTime = 0;
-    this.actionState = 'CHARGE_WINDUP';
+  public registerBossDemirDag(boss: BossDemirDagBekcisi): void {
+    this.bossDemirDag = boss;
   }
 
-  public releaseCharge(): void {
-    if (!this.isCharging) return;
-    this.isCharging = false;
-    if (this.chargeHoldTime >= this.MIN_CHARGE_TIME) {
-      this.triggerAttack(true);
-    } else {
-      // Standard strike fallback
-      this.triggerAttack(false);
-    }
+  public registerBossSahmaran(boss: BossSahmaran): void {
+    this.bossSahmaran = boss;
   }
 
-  /**
-   * Dodge Roll (0.25s i-frame + possible Kut Zamanı)
-   */
-  public triggerDodgeRoll(headingAngle: number): boolean {
-    if (this.actionState === 'DODGE_ROLL' || this.actionState === 'HURT') return false;
-    if (this.stamina < 18) return false;
-
-    this.stamina -= 18;
-    this.staminaRegenCooldown = 0.9;
-    this.actionState = 'DODGE_ROLL';
-    this.actionTimer = 0;
-    this.rollTimer = 0;
-    this.isRolling = true;
-
-    // Check if dodging right before an incoming dummy attack (0.15s window -> Kut Zamanı!)
-    for (const dummy of this.dummies) {
-      if (dummy.isAttacker && dummy.isTelegraphing) {
-        // Perfect Dodge window triggered!
-        this.triggerKutZamani();
-        break;
-      }
-    }
-
-    return true;
+  public registerBossYelbegen(boss: BossYelbegen): void {
+    this.bossYelbegen = boss;
   }
 
-  /**
-   * Raises shield (Hold) or taps for Parry
-   */
-  public setShieldActive(active: boolean): void {
-    if (this.actionState === 'DODGE_ROLL' || this.actionState === 'HURT') return;
+  public registerBossErlikHan(boss: BossErlikHan): void {
+    this.bossErlikHan = boss;
+  }
 
-    if (active) {
-      if (!this.isShieldRaised) {
-        // Shield just raised: start 0.20s parry frame window
-        this.parryWindowTimer = this.PARRY_WINDOW;
-      }
-      this.isShieldRaised = true;
-      if (this.actionState === 'IDLE') {
-        this.actionState = 'SHIELD_BLOCK';
-      }
-    } else {
-      this.isShieldRaised = false;
-      this.parryWindowTimer = 0;
-      if (this.actionState === 'SHIELD_BLOCK' || this.actionState === 'PARRY') {
-        this.actionState = 'IDLE';
+  public registerCampManager(campManager: EnemyCampManager): void {
+    this.campManager = campManager;
+    const campEnemies = campManager.getAllEnemies();
+    for (let i = 0; i < campEnemies.length; i++) {
+      const ce = campEnemies[i];
+      if (!this.enemies.includes(ce)) {
+        this.enemies.push(ce);
       }
     }
   }
 
-  /**
-   * Bow Aim Mode Toggle
-   */
-  public setBowAim(active: boolean): void {
-    if (this.actionState === 'DODGE_ROLL' || this.actionState === 'HURT') return;
-    if (active) {
-      this.actionState = 'BOW_AIM';
-    } else {
-      if (this.actionState === 'BOW_AIM') {
-        this.actionState = 'IDLE';
-      }
-    }
+  public registerBlightManager(blightManager: WinterBlightManager): void {
+    this.blightManager = blightManager;
+  }
+
+  public switchWeapon(type: WeaponType): void {
+    this.activeWeapon = type;
+    this.comboStep = 0;
+    this.actionState = 'IDLE';
+    ProceduralAudio.playButtonClick();
   }
 
   /**
-   * Fires arrow in direction
+   * Savaş Aksiyonları & 60 FPS Render Döngüsü Güncellemesi
    */
-  public shootArrow(origin: Vector3, forwardDir: Vector3): boolean {
-    if (this.stamina < 15) return false;
-    const shot = this.arrowSystem.shootArrow(origin, forwardDir, 32);
-    if (shot) {
-      this.stamina -= 15;
-      this.staminaRegenCooldown = 0.6;
-      this.actionState = 'BOW_SHOOT';
-      this.actionTimer = 0;
-      this.addCameraTrauma(0.2);
-    }
-    return shot;
-  }
-
-  /**
-   * Toggles Lock-on to nearest target or cycles targets
-   */
-  public toggleLockOn(playerPos: Vector3): void {
-    if (this.lockedTarget) {
-      // Find next target or unlock
-      const idx = this.dummies.indexOf(this.lockedTarget);
-      const nextIdx = (idx + 1) % this.dummies.length;
-      const nextTarget = this.dummies[nextIdx];
-      const dist = Vector3.Distance(playerPos, nextTarget.position);
-      if (dist <= 25.0) {
-        this.lockedTarget = nextTarget;
-      } else {
-        this.lockedTarget = null;
-      }
-    } else {
-      // Acquire closest dummy within 25m
-      let closest: TrainingDummy | null = null;
-      let closestDist = 25.0;
-
-      for (const d of this.dummies) {
-        const dist = Vector3.Distance(playerPos, d.position);
-        if (dist < closestDist) {
-          closestDist = dist;
-          closest = d;
-        }
-      }
-
-      this.lockedTarget = closest;
-    }
-  }
-
-  /**
-   * Kut Zamanı (Flurry Time) - Golden slow-motion for 3.0s
-   */
-  public triggerKutZamani(): void {
-    this.isKutZamaniActive = true;
-    this.kutZamaniTimer = this.KUT_ZAMANI_DURATION;
-    this.addCameraTrauma(0.5);
-
-    // Announce via HUD
-    const hudCenter = document.getElementById('statusMessage');
-    if (hudCenter) {
-      hudCenter.innerText = "⚡ KUT ZAMANI! (YAVAŞ ÇEKİM)";
-      hudCenter.style.color = '#facc15';
-      hudCenter.style.borderColor = '#facc15';
+  public update(
+    deltaTime: number,
+    playerPos: Vector3,
+    playerHeading: number,
+    world: WorldManager,
+    isAirborne = false,
+    footstepRadius = 12.0,
+    isCamouflaged = false,
+    isNight = false
+  ): void {
+    // Hit-stop Mikro-Donma
+    if (this.playerHitStopTimer > 0) {
+      this.playerHitStopTimer -= deltaTime;
+      return;
     }
 
-    // Spawn golden Kut spark burst
-    this.emitSparksAt(this.scene.activeCamera?.position || Vector3.Zero(), 35);
-  }
-
-  // ===================== MAIN COMBAT TICK =====================
-
-  public update(deltaTime: number, playerPos: Vector3, playerHeading: number, world: WorldManager): void {
-    // 1. Kut Zamanı slow-motion timer (world speed = 0.2x, but player at 1.0x)
-    const effectiveWorldDelta = this.isKutZamaniActive ? deltaTime * 0.2 : deltaTime;
-
-    if (this.isKutZamaniActive) {
-      this.kutZamaniTimer -= deltaTime;
-      if (this.kutZamaniTimer <= 0) {
-        this.isKutZamaniActive = false;
-        const hudCenter = document.getElementById('statusMessage');
-        if (hudCenter) {
-          hudCenter.innerText = "512x512m Açık Dünya — Dört Biyom";
-          hudCenter.style.color = '#f8fafc';
-          hudCenter.style.borderColor = 'rgba(250, 204, 21, 0.35)';
-        }
-      }
-    }
-
-    // 2. Camera Trauma Shake Decay
+    // Kamera Sarsıntısı Sönümlenmesi
     if (this.cameraShakeTrauma > 0) {
-      this.cameraShakeTrauma = Math.max(0, this.cameraShakeTrauma - deltaTime * 2.2);
-      const shakeMag = this.cameraShakeTrauma * this.cameraShakeTrauma * 0.35;
-      this.cameraShakeOffset.set(
-        (Math.random() - 0.5) * shakeMag,
-        (Math.random() - 0.5) * shakeMag,
-        (Math.random() - 0.5) * shakeMag
-      );
+      this.cameraShakeTrauma = Math.max(0, this.cameraShakeTrauma - deltaTime * 1.8);
+      const shakeFactor = this.cameraShakeTrauma * this.cameraShakeTrauma;
+      this.cameraShakeOffset.x = (Math.random() - 0.5) * 0.45 * shakeFactor;
+      this.cameraShakeOffset.y = (Math.random() - 0.5) * 0.45 * shakeFactor;
+      this.cameraShakeOffset.z = (Math.random() - 0.5) * 0.45 * shakeFactor;
     } else {
       this.cameraShakeOffset.set(0, 0, 0);
     }
 
-    // 3. Hit-stop micro-freeze (on player animation only)
-    if (this.playerHitStopTimer > 0) {
-      this.playerHitStopTimer -= deltaTime;
+    // Havada Yay Nişanı (Mid-Air Bullet Time)
+    this.isAirborneAim = this.actionState === 'BOW_AIM' && isAirborne;
+    if (this.isAirborneAim) {
+      this.bulletTimeScale = 0.20;
+      this.stamina = Math.max(0, this.stamina - 20.0 * deltaTime);
+      if (this.stamina <= 0) {
+        this.actionState = 'IDLE';
+        this.isAirborneAim = false;
+      }
+    } else if (this.isKutZamaniActive) {
+      this.bulletTimeScale = 0.20;
+    } else {
+      this.bulletTimeScale = 1.0;
     }
 
-    // 4. Parry window decay
-    if (this.parryWindowTimer > 0) {
-      this.parryWindowTimer -= deltaTime;
+    // Kut Zamanı Sayaç
+    if (this.isKutZamaniActive) {
+      this.kutZamaniTimer -= deltaTime;
+      if (this.kutZamaniTimer <= 0) {
+        this.exitKutZamani();
+      }
     }
 
-    // 5. Stamina regeneration
+    // Stamina Yenilenmesi (Kara Kış Kirlenmesi içinde Kut yenilenmez!)
+    const isBlockedByBlight = this.blightManager ? this.blightManager.isPlayerInsideBlight : false;
     if (this.staminaRegenCooldown > 0) {
       this.staminaRegenCooldown -= deltaTime;
-    } else if (this.actionState === 'IDLE' && !this.isShieldRaised) {
+    } else if (this.actionState !== 'BOW_AIM' && !this.isCharging && !isBlockedByBlight) {
       this.stamina = Math.min(this.maxStamina, this.stamina + this.staminaRegenRate * deltaTime);
     }
 
-    // 6. Update 3D Floating Damage Numbers
-    this.damageNumbers.update(deltaTime);
-
-    // 7. Update Ballistic Arrows
-    this.arrowSystem.update(
-      effectiveWorldDelta,
-      world,
-      (pos, radius) => {
-        for (const dummy of this.dummies) {
-          const dummyCenter = dummy.position.clone().add(new Vector3(0, 0.8, 0));
-          if (Vector3.Distance(pos, dummyCenter) <= (0.55 + radius)) {
-            const isHead = pos.y >= (dummy.position.y + 1.15);
-            return { hit: true, enemyPos: dummy.position, isHeadshot: isHead };
-          }
-        }
-        return null;
-      },
-      (hitPos, normal, damage, isHeadshot) => {
-        // Register arrow damage on dummy
-        for (const dummy of this.dummies) {
-          if (Vector3.Distance(hitPos, dummy.position.clone().add(new Vector3(0, 0.8, 0))) <= 1.2) {
-            dummy.takeDamage(damage, normal);
-            this.damageNumbers.spawn(hitPos, damage, isHeadshot);
-            this.emitSparksAt(hitPos, isHeadshot ? 30 : 15);
-            this.addCameraTrauma(isHeadshot ? 0.35 : 0.15);
-            break;
-          }
-        }
-      }
-    );
-
-    // 8. Update Training Dummies & check incoming attacks on player
-    for (const dummy of this.dummies) {
-      const attackEvent = dummy.update(effectiveWorldDelta, playerPos);
-      if (attackEvent && attackEvent.isStrikeActive) {
-        this.handleIncomingEnemyAttack(dummy, attackEvent, playerPos);
-      }
-    }
-
-    // 9. Player Action State Machine (Combo timings, root motion, hitboxes)
-    this.updatePlayerActions(deltaTime, playerPos, playerHeading);
-
-    // 10. Validate lock-on target distance
-    if (this.lockedTarget) {
-      const dist = Vector3.Distance(playerPos, this.lockedTarget.position);
-      if (dist > 30.0) {
-        this.lockedTarget = null;
-      }
-    }
-  }
-
-  /**
-   * Evaluates incoming enemy attacks against Block, Parry, Dodge i-frames, and Damage.
-   */
-  private handleIncomingEnemyAttack(
-    dummy: TrainingDummy,
-    event: DummyAttackEvent,
-    playerPos: Vector3
-  ): void {
-    const dist = Vector3.Distance(dummy.position, playerPos);
-    if (dist > 2.8) return; // Out of melee reach
-
-    // 1. Invulnerable during dodge roll i-frames?
-    if (this.isRolling && this.rollTimer <= this.ROLL_IFRAME_DURATION) {
-      // Evaded with i-frames!
-      return;
-    }
-
-    // 2. Parry Window Active? (Tap shield within 0.20s of impact)
-    if (this.isShieldRaised && this.parryWindowTimer > 0) {
-      // PARRY SUCCESSFUL!
-      dummy.applyParryStun();
-      this.emitSparksAt(playerPos.clone().add(new Vector3(0, 1.0, 0)), 40);
-      this.damageNumbers.spawn(dummy.position.clone().add(new Vector3(0, 1.2, 0)), 0, true);
-      this.addCameraTrauma(0.6);
-      this.stamina = Math.min(this.maxStamina, this.stamina + 25); // Reward stamina
-      this.actionState = 'PARRY';
-      this.actionTimer = 0;
-      this.parryWindowTimer = 0;
-
-      const hudCenter = document.getElementById('statusMessage');
-      if (hudCenter) {
-        hudCenter.innerText = "🛡️ PARRY! DÜŞMAN SERSEMLEDİ!";
-        hudCenter.style.color = '#38bdf8';
-      }
-      return;
-    }
-
-    // 3. Regular Shield Block Active? (Reduces damage 80%, consumes stamina)
-    if (this.isShieldRaised) {
-      const blockedDmg = event.damage * 0.2;
-      this.health = Math.max(0, this.health - blockedDmg);
-      this.stamina = Math.max(0, this.stamina - 15);
-      this.emitSparksAt(playerPos.clone().add(new Vector3(0, 1.0, 0)), 15);
-      this.damageNumbers.spawn(playerPos.clone().add(new Vector3(0, 1.0, 0)), blockedDmg, false);
-      this.addCameraTrauma(0.2);
-      return;
-    }
-
-    // 4. Direct Hit Taken!
-    this.health = Math.max(0, this.health - event.damage);
-    this.damageNumbers.spawn(playerPos.clone().add(new Vector3(0, 1.0, 0)), event.damage, false);
-    this.emitSparksAt(playerPos.clone().add(new Vector3(0, 1.0, 0)), 20);
-    this.addCameraTrauma(0.45);
-    this.actionState = 'HURT';
-    this.actionTimer = 0;
-
-    // Reset health if player falls during practice
-    if (this.health <= 0) {
-      this.health = this.maxHealth;
-    }
-  }
-
-  /**
-   * Advances player's active melee combos, charge spin, roll, and bow actions.
-   */
-  private updatePlayerActions(deltaTime: number, playerPos: Vector3, playerHeading: number): void {
-    this.rootMotionOffset.set(0, 0, 0);
-
-    // Combo Window decay (0.35s after each strike)
+    // Kombo & Parry Sayaçları
     if (this.comboWindowTimer > 0) {
       this.comboWindowTimer -= deltaTime;
       if (this.comboWindowTimer <= 0) {
         this.comboStep = 0;
       }
     }
+    if (this.parryWindowTimer > 0) {
+      this.parryWindowTimer -= deltaTime;
+    }
 
-    // Charge windup holding
-    if (this.actionState === 'CHARGE_WINDUP') {
-      this.chargeHoldTime += deltaTime;
+    // Koordinatör & Uzamsal Izgara Güncellemesi (10-15 Hz Dilimleme)
+    this.coordinator.update(deltaTime, this.enemies);
+
+    // Düşmanların ve Kuklaların Güncellenmesi
+    this.updateEnemies(deltaTime, playerPos, world, footstepRadius, isCamouflaged, isNight);
+
+    // Boss Tepegöz Güncellemesi & Saldırı Karşılama
+    if (this.bossTepegoz && !this.bossTepegoz.isDead) {
+      const bossResult = this.bossTepegoz.update(playerPos, world, deltaTime);
+      if (bossResult.isAttacking && bossResult.damage > 0) {
+        const bossDist = Vector3.Distance(playerPos, this.bossTepegoz.position);
+        if (bossDist < 6.5) {
+          this.handleIncomingEnemyAttack(this.bossTepegoz.position, bossResult.damage, playerPos, undefined, true);
+        }
+      }
+    }
+
+    // Boss Demir Dağ Bekçisi Güncellemesi
+    if (this.bossDemirDag && !this.bossDemirDag.isDead) {
+      this.bossDemirDag.update(deltaTime, playerPos, this);
+    }
+
+    // Boss Şahmaran Güncellemesi
+    if (this.bossSahmaran && !this.bossSahmaran.isDead) {
+      this.bossSahmaran.update(deltaTime, playerPos, this);
+    }
+
+    // Boss 7 Başlı Yelbegen Güncellemesi
+    if (this.bossYelbegen && !this.bossYelbegen.isDead) {
+      this.bossYelbegen.update(deltaTime, playerPos, this);
+    }
+
+    // Boss Erlik Han Güncellemesi
+    if (this.bossErlikHan && !this.bossErlikHan.isDead) {
+      this.bossErlikHan.update(deltaTime, playerPos, this);
+    }
+
+    // Kampların ve Kara Totemlerin Güncellenmesi
+    if (this.campManager) {
+      this.campManager.update(playerPos, deltaTime, this.blightManager ?? undefined, this.lootManager);
+    }
+
+    // Ganimet Mıknatısı ve Toplama Güncellemesi
+    this.lootManager.update(playerPos, deltaTime, (type: LootType, amount: number) => {
+      const inv = InventoryManager.getInstance();
+      if (type === 'HEALTH_FRUIT') {
+        this.health = Math.min(this.maxHealth, this.health + 30);
+      } else if (type === 'KUT_DUST') {
+        this.stamina = Math.min(this.maxStamina, this.stamina + 35);
+        inv.addItem('mat_kut_powder', amount * 5);
+      } else if (type === 'IRON_ORE') {
+        inv.addItem('mat_iron', amount * 2);
+      } else if (type === 'DEMON_BONE') {
+        inv.addItem('mat_bone', amount * 2);
+      } else if (type === 'ARROWS') {
+        this.arrowSystem.ammoStock.NORMAL = Math.min(60, this.arrowSystem.ammoStock.NORMAL + amount);
+        inv.addItem('arrow_regular', amount);
+      }
+    });
+
+    // Aktif Dövüş Durum Makinesini Güncelle
+    this.updateCombatStateMachine(deltaTime, playerPos, playerHeading);
+
+    // Ok Fırlatma Sistemini Güncelle
+    this.arrowSystem.update(
+      deltaTime,
+      world,
+      (pos: Vector3, radius: number) => {
+        // 1. Boss Tepegöz Çarpışması
+        if (this.bossTepegoz && !this.bossTepegoz.isDead) {
+          if (this.bossTepegoz.checkEyeHit(pos)) {
+            return { hit: true, enemyPos: this.bossTepegoz.position, isHeadshot: true };
+          }
+          const bdx = this.bossTepegoz.position.x - pos.x;
+          const bdz = this.bossTepegoz.position.z - pos.z;
+          const bdy = (this.bossTepegoz.position.y + 2.5) - pos.y;
+          if (bdx * bdx + bdy * bdy + bdz * bdz < (radius + 2.2) * (radius + 2.2)) {
+            return { hit: true, enemyPos: this.bossTepegoz.position, isHeadshot: false };
+          }
+        }
+
+        // 1.5. Boss Demir Dağ Bekçisi Çarpışması
+        if (this.bossDemirDag && !this.bossDemirDag.isDead) {
+          const bdx = this.bossDemirDag.position.x - pos.x;
+          const bdz = this.bossDemirDag.position.z - pos.z;
+          const bdy = (this.bossDemirDag.position.y + 2.5) - pos.y;
+          if (bdx * bdx + bdy * bdy + bdz * bdz < (radius + 2.5) * (radius + 2.5)) {
+            return { hit: true, enemyPos: this.bossDemirDag.position, isHeadshot: false };
+          }
+        }
+
+        // 1.6. Boss Şahmaran Çarpışması
+        if (this.bossSahmaran && !this.bossSahmaran.isDead) {
+          const bdx = this.bossSahmaran.position.x - pos.x;
+          const bdz = this.bossSahmaran.position.z - pos.z;
+          const bdy = (this.bossSahmaran.position.y + 2.5) - pos.y;
+          if (bdx * bdx + bdy * bdy + bdz * bdz < (radius + 2.8) * (radius + 2.8)) {
+            return { hit: true, enemyPos: this.bossSahmaran.position, isHeadshot: false };
+          }
+        }
+
+        // 1.7. Boss Yelbegen Çarpışması
+        if (this.bossYelbegen && !this.bossYelbegen.isDead) {
+          const bdx = this.bossYelbegen.position.x - pos.x;
+          const bdz = this.bossYelbegen.position.z - pos.z;
+          const bdy = (this.bossYelbegen.position.y + 3.0) - pos.y;
+          if (bdx * bdx + bdy * bdy + bdz * bdz < (radius + 4.5) * (radius + 4.5)) {
+            return { hit: true, enemyPos: this.bossYelbegen.position, isHeadshot: false };
+          }
+        }
+
+        // 1.8. Boss Erlik Han Çarpışması
+        if (this.bossErlikHan && !this.bossErlikHan.isDead && this.bossErlikHan.phase !== 'PHASE_3_WEAKENED_CHOICE') {
+          const bdx = this.bossErlikHan.position.x - pos.x;
+          const bdz = this.bossErlikHan.position.z - pos.z;
+          const bdy = (this.bossErlikHan.position.y + 2.5) - pos.y;
+          if (bdx * bdx + bdy * bdy + bdz * bdz < (radius + 3.0) * (radius + 3.0)) {
+            return { hit: true, enemyPos: this.bossErlikHan.position, isHeadshot: false };
+          }
+        }
+
+        // 2. Kara Totem Çarpışması
+        if (this.campManager && this.campManager.checkDamageTotem(pos, radius, 35, this.blightManager ?? undefined)) {
+          return { hit: true, enemyPos: pos, isHeadshot: false };
+        }
+
+        // 3. Normal Körmöz Düşmanları
+        for (let i = 0; i < this.enemies.length; i++) {
+          const enemy = this.enemies[i];
+          if (enemy.isDead) continue;
+          const dx = enemy.position.x - pos.x;
+          const dz = enemy.position.z - pos.z;
+          const dy = (enemy.position.y + 1.0) - pos.y;
+          if (dx * dx + dy * dy + dz * dz < (radius + 0.8) * (radius + 0.8)) {
+            const isHead = pos.y > enemy.position.y + 1.4;
+            return { hit: true, enemyPos: enemy.position, isHeadshot: isHead };
+          }
+        }
+
+        for (let i = 0; i < this.dummies.length; i++) {
+          const dummy = this.dummies[i];
+          const dx = dummy.position.x - pos.x;
+          const dz = dummy.position.z - pos.z;
+          const dy = (dummy.position.y + 1.0) - pos.y;
+          if (dx * dx + dy * dy + dz * dz < (radius + 0.6) * (radius + 0.6)) {
+            return { hit: true, enemyPos: dummy.position, isHeadshot: pos.y > dummy.position.y + 1.4 };
+          }
+        }
+        return null;
+      },
+      (hitPos: Vector3, hitNormal: Vector3, damage: number, isHeadshot: boolean, arrowType: ArrowType) => {
+        const arrowDef = ARROW_DEFINITIONS[arrowType];
+
+        // Boss Tepegöz'e Hasar
+        if (this.bossTepegoz && !this.bossTepegoz.isDead) {
+          const dist = Vector3.Distance(hitPos, this.bossTepegoz.position);
+          if (dist < 4.2) {
+            const finalDmg = isHeadshot ? damage * 2.2 : damage;
+            this.bossTepegoz.takeDamage(finalDmg);
+            this.damageNumbers.spawn(hitPos, Math.round(finalDmg), isHeadshot);
+            this.emitSparksAt(hitPos, arrowType === 'FIRE' ? 55 : 30);
+            this.addCameraTrauma(isHeadshot ? 0.65 : 0.35);
+            ProceduralAudio.playImpact(true);
+            return;
+          }
+        }
+
+        // Boss Demir Dağ Bekçisi'ne Ok Hasarı
+        if (this.bossDemirDag && !this.bossDemirDag.isDead) {
+          const dist = Vector3.Distance(hitPos, this.bossDemirDag.position);
+          if (dist < 4.5) {
+            const dealt = this.bossDemirDag.takeDamage(damage, isHeadshot);
+            this.damageNumbers.spawn(hitPos, Math.round(dealt), isHeadshot);
+            this.emitSparksAt(hitPos, arrowType === 'FIRE' ? 55 : 30);
+            this.addCameraTrauma(0.35);
+            ProceduralAudio.playImpact(true);
+            return;
+          }
+        }
+
+        // Boss Şahmaran'a Ok Hasarı
+        if (this.bossSahmaran && !this.bossSahmaran.isDead) {
+          const dist = Vector3.Distance(hitPos, this.bossSahmaran.position);
+          if (dist < 5.0) {
+            const dealt = this.bossSahmaran.takeDamage(damage, arrowType === 'FIRE');
+            this.damageNumbers.spawn(hitPos, Math.round(dealt), isHeadshot);
+            this.emitSparksAt(hitPos, arrowType === 'FIRE' ? 55 : 30);
+            this.addCameraTrauma(0.35);
+            ProceduralAudio.playImpact(true);
+            return;
+          }
+        }
+
+        // Boss 7 Başlı Yelbegen'e Ok Hasarı (Ateşle dağlama ve baş kesme)
+        if (this.bossYelbegen && !this.bossYelbegen.isDead) {
+          const dist = Vector3.Distance(hitPos, this.bossYelbegen.position);
+          if (dist < 8.0) {
+            const isFire = arrowType === 'FIRE';
+            const dealt = this.bossYelbegen.takeDamage(damage, isFire);
+            this.damageNumbers.spawn(hitPos, Math.round(dealt), isHeadshot);
+            this.emitSparksAt(hitPos, isFire ? 55 : 30);
+            this.addCameraTrauma(0.4);
+            ProceduralAudio.playImpact(true);
+            return;
+          }
+        }
+
+        // Boss Erlik Han'a Ok Hasarı
+        if (this.bossErlikHan && !this.bossErlikHan.isDead && this.bossErlikHan.phase !== 'PHASE_3_WEAKENED_CHOICE') {
+          const dist = Vector3.Distance(hitPos, this.bossErlikHan.position);
+          if (dist < 5.5) {
+            const isFire = arrowType === 'FIRE';
+            const dealt = this.bossErlikHan.takeDamage(damage, isFire);
+            this.damageNumbers.spawn(hitPos, Math.round(dealt), isHeadshot);
+            this.emitSparksAt(hitPos, isFire ? 55 : 30);
+            this.addCameraTrauma(0.4);
+            ProceduralAudio.playImpact(true);
+            return;
+          }
+        }
+
+        // Normal Düşmanlara Hasar
+        for (let i = 0; i < this.enemies.length; i++) {
+          const enemy = this.enemies[i];
+          if (enemy.isDead) continue;
+          const dist = Vector3.Distance(hitPos, enemy.position);
+          if (dist < 1.6) {
+            enemy.takeTypedDamage(
+              damage,
+              arrowDef.damageType,
+              arrowDef.id === 'PIERCING',
+              false,
+              hitNormal.scale(-1),
+              this.lootManager
+            );
+            break;
+          }
+        }
+
+        if (arrowType === 'FIRE') {
+          ElementSystem.getInstance(this.scene).igniteAt(hitPos, 2.8);
+        }
+
+        this.damageNumbers.spawn(hitPos, damage, isHeadshot);
+        this.emitSparksAt(hitPos, arrowType === 'FIRE' ? 45 : 22);
+        this.addCameraTrauma(isHeadshot ? 0.45 : 0.25);
+        ProceduralAudio.playImpact(true);
+      }
+    );
+  }
+
+  private updateEnemies(
+    deltaTime: number,
+    playerPos: Vector3,
+    world: WorldManager,
+    footstepRadius: number,
+    isCamouflaged: number | boolean,
+    isNight = false
+  ): void {
+    const camou = !!isCamouflaged;
+    const campfire = world.landmarks ? world.landmarks.campfirePos : new Vector3(0, 0, 0);
+    const distToCampfireSq = (playerPos.x - campfire.x) ** 2 + (playerPos.z - campfire.z) ** 2;
+    const isNearCampfire = distToCampfireSq < 64.0;
+
+    for (let i = 0; i < this.dummies.length; i++) {
+      const dummy = this.dummies[i];
+      const attackEvent = dummy.update(deltaTime, playerPos);
+      if (attackEvent && attackEvent.isStrikeActive) {
+        this.handleIncomingEnemyAttack(attackEvent.dummyPos, attackEvent.damage, playerPos);
+      }
+    }
+
+    for (let i = 0; i < this.enemies.length; i++) {
+      const enemy = this.enemies[i];
+      const result = enemy.update(
+        playerPos,
+        world,
+        deltaTime,
+        footstepRadius,
+        camou,
+        isNight,
+        isNearCampfire,
+        this.coordinator,
+        this.lootManager
+      );
+
+      if (result.isAttacking && result.damage > 0) {
+        this.handleIncomingEnemyAttack(enemy.position, result.damage, playerPos, enemy);
+      }
+    }
+  }
+
+  /**
+   * Düşmandan veya Tepegöz'den Gelen Saldırıyı Karşılama
+   */
+  private handleIncomingEnemyAttack(
+    enemyPos: Vector3,
+    damage: number,
+    playerPos: Vector3,
+    enemy?: EnemyEntity,
+    isBoss = false
+  ): void {
+    const distSq = (enemyPos.x - playerPos.x) ** 2 + (enemyPos.z - playerPos.z) ** 2;
+    if (distSq > (isBoss ? 48.0 : 9.0)) return;
+
+    // 1. Mükemmel Savuşturma (Perfect Parry)
+    if (this.parryWindowTimer > 0) {
+      ProceduralAudio.playParry();
+      this.addCameraTrauma(isBoss ? 0.75 : 0.5);
+      this.emitSparksAt(playerPos, isBoss ? 60 : 45);
+
+      if (isBoss && this.bossTepegoz) {
+        this.bossTepegoz.takeDamage(95);
+        this.damageNumbers.spawn(enemyPos, 95, true);
+        EventBus.emit('ui:dialogue_show', {
+          speaker: 'Börü',
+          text: 'MÜKEMMEL PARRY! Dev Tepegöz sarsıldı, şimdi gözüne vur!'
+        });
+      } else if (enemy) {
+        enemy.triggerParryStagger();
+        this.damageNumbers.spawn(enemyPos, 0, false);
+        EventBus.emit('ui:dialogue_show', {
+          speaker: 'Börü',
+          text: 'Mükemmel Parry! Düşman sersemledi, şimdi vur!'
+        });
+      }
       return;
     }
 
-    // Dodge Roll
-    if (this.actionState === 'DODGE_ROLL') {
-      this.actionTimer += deltaTime;
-      this.rollTimer = this.actionTimer;
+    // 2. Kaçış Sırasındaki i-Frame
+    if (this.isRolling && this.rollTimer < this.ROLL_IFRAME_DURATION) {
+      return;
+    }
 
-      // Root motion leap forward
+    // 3. Normal Kalkan Bloklama & Kalkan Kırılması
+    const hasYerKutu = KamPowerManager.getInstance(this.scene).hasYerKutu;
+    const baseCost = isBoss ? 38 : 15;
+    const blockCost = Math.round(baseCost * (hasYerKutu ? 0.6 : 1.0));
+    if (this.isShieldRaised && this.stamina >= blockCost) {
+      this.stamina -= blockCost;
+      this.staminaRegenCooldown = isBoss ? 1.5 : 1.0;
+      ProceduralAudio.playShieldBlock();
+      this.addCameraTrauma(isBoss ? 0.45 : 0.2);
+      this.emitSparksAt(playerPos, isBoss ? 35 : 15);
+      return;
+    } else if (this.isShieldRaised && isBoss) {
+      // Tepegöz'ün Gürzü Kalkanı Kırar!
+      this.stamina = 0;
+      this.isShieldRaised = false;
+      this.actionState = 'HURT';
+      this.actionTimer = 0;
+      ProceduralAudio.playImpact(true);
+      this.health = Math.max(0, this.health - Math.round(damage * 0.45));
+      EventBus.emit('ui:dialogue_show', {
+        speaker: 'Börü',
+        text: 'Kalkanın kırıldı! Tepegöz’ün devasa gücünü ancak kaçarak veya Parry ile savuşturabilirsin!'
+      });
+      return;
+    }
+
+    // 4. Hasar Alma
+    this.health = Math.max(0, this.health - damage);
+    this.playerHitStopTimer = isBoss ? 0.12 : 0.08;
+    this.addCameraTrauma(isBoss ? 0.7 : 0.45);
+    ProceduralAudio.playImpact(true);
+    this.actionState = 'HURT';
+    this.actionTimer = 0;
+  }
+
+  private updateCombatStateMachine(deltaTime: number, playerPos: Vector3, playerHeading: number): void {
+    this.rootMotionOffset.set(0, 0, 0);
+    const weaponDef = WEAPON_DEFINITIONS[this.activeWeapon];
+
+    // ================= FLURRY RUSH =================
+    if (this.actionState === 'FLURRY_RUSH') {
+      this.flurryTimer += deltaTime;
+      if (this.flurryTimer >= 0.09) {
+        this.flurryTimer = 0;
+        this.flurryStep++;
+
+        this.checkMeleeHitbox(playerPos, playerHeading, 28, 3.2, Math.PI * 0.75, false);
+        ProceduralAudio.playSwordSwing(1);
+
+        if (this.flurryStep >= this.FLURRY_TOTAL_HITS) {
+          this.checkMeleeHitbox(playerPos, playerHeading, 45, 3.5, Math.PI, true);
+          ProceduralAudio.playSwordSwing(3);
+          this.actionState = 'IDLE';
+          this.isFlurryRush = false;
+        }
+      }
+      return;
+    }
+
+    // ================= KAM KILICI KOMBO DÖNGÜSÜ =================
+    if (this.actionState === 'ATTACK_1' || this.actionState === 'ATTACK_2' || this.actionState === 'ATTACK_3') {
+      this.actionTimer += deltaTime;
+      const stepIdx = this.actionState === 'ATTACK_1' ? 0 : this.actionState === 'ATTACK_2' ? 1 : 2;
+      const stepDuration = weaponDef.comboTimings[stepIdx];
       const forwardX = Math.sin(playerHeading);
       const forwardZ = Math.cos(playerHeading);
-      const rollSpeed = 10.5 * (1.0 - this.actionTimer / this.ROLL_DURATION);
+
+      if (this.actionTimer > 0.05 && this.actionTimer < stepDuration * 0.6) {
+        const stepDist = weaponDef.rootMotionSteps[stepIdx];
+        this.rootMotionOffset.x = forwardX * (stepDist / (stepDuration * 0.55)) * deltaTime;
+        this.rootMotionOffset.z = forwardZ * (stepDist / (stepDuration * 0.55)) * deltaTime;
+      }
+
+      const hitFrame = stepDuration * 0.4;
+      if (this.actionTimer >= hitFrame && this.actionTimer - deltaTime < hitFrame) {
+        const dmg = weaponDef.baseDamage * (stepIdx === 2 ? 1.5 : stepIdx === 1 ? 1.15 : 1.0);
+        this.checkMeleeHitbox(playerPos, playerHeading, dmg, weaponDef.reach, Math.PI * 0.65, stepIdx === 2);
+      }
+
+      if (this.actionTimer >= stepDuration) {
+        this.actionState = 'IDLE';
+        if (stepIdx < 2) {
+          this.comboWindowTimer = 0.45;
+          this.comboStep = stepIdx + 1;
+        } else {
+          this.comboStep = 0;
+        }
+      }
+      return;
+    }
+
+    // ================= SAVAŞ BALTASI KOMBO DÖNGÜSÜ =================
+    if (this.actionState === 'AXE_ATTACK_1' || this.actionState === 'AXE_ATTACK_2') {
+      this.actionTimer += deltaTime;
+      const stepIdx = this.actionState === 'AXE_ATTACK_1' ? 0 : 1;
+      const stepDuration = weaponDef.comboTimings[stepIdx];
+      const forwardX = Math.sin(playerHeading);
+      const forwardZ = Math.cos(playerHeading);
+
+      if (this.actionTimer > 0.1 && this.actionTimer < stepDuration * 0.6) {
+        const stepDist = weaponDef.rootMotionSteps[stepIdx];
+        this.rootMotionOffset.x = forwardX * (stepDist / (stepDuration * 0.5)) * deltaTime;
+        this.rootMotionOffset.z = forwardZ * (stepDist / (stepDuration * 0.5)) * deltaTime;
+      }
+
+      const hitFrame = stepDuration * 0.45;
+      if (this.actionTimer >= hitFrame && this.actionTimer - deltaTime < hitFrame) {
+        const dmg = weaponDef.baseDamage * (stepIdx === 1 ? 1.9 : 1.1);
+        this.checkMeleeHitbox(playerPos, playerHeading, dmg, weaponDef.reach, Math.PI * 0.85, true, true);
+      }
+
+      if (this.actionTimer >= stepDuration) {
+        this.actionState = 'IDLE';
+        if (stepIdx === 0) {
+          this.comboWindowTimer = 0.50;
+          this.comboStep = 1;
+        } else {
+          this.comboStep = 0;
+        }
+      }
+      return;
+    }
+
+    // ================= KARGI KOMBO DÖNGÜSÜ =================
+    if (this.actionState === 'SPEAR_ATTACK_1' || this.actionState === 'SPEAR_ATTACK_2' || this.actionState === 'SPEAR_ATTACK_3') {
+      this.actionTimer += deltaTime;
+      const stepIdx = this.actionState === 'SPEAR_ATTACK_1' ? 0 : this.actionState === 'SPEAR_ATTACK_2' ? 1 : 2;
+      const stepDuration = weaponDef.comboTimings[stepIdx];
+      const forwardX = Math.sin(playerHeading);
+      const forwardZ = Math.cos(playerHeading);
+
+      if (this.actionTimer > 0.05 && this.actionTimer < stepDuration * 0.5) {
+        const stepDist = weaponDef.rootMotionSteps[stepIdx];
+        this.rootMotionOffset.x = forwardX * (stepDist / (stepDuration * 0.45)) * deltaTime;
+        this.rootMotionOffset.z = forwardZ * (stepDist / (stepDuration * 0.45)) * deltaTime;
+      }
+
+      const hitFrame = stepDuration * 0.35;
+      if (this.actionTimer >= hitFrame && this.actionTimer - deltaTime < hitFrame) {
+        const dmg = weaponDef.baseDamage * (stepIdx === 2 ? 1.6 : 1.0);
+        this.checkMeleeHitbox(playerPos, playerHeading, dmg, weaponDef.reach, Math.PI * 0.55, stepIdx === 2);
+      }
+
+      if (this.actionTimer >= stepDuration) {
+        this.actionState = 'IDLE';
+        if (stepIdx < 2) {
+          this.comboWindowTimer = 0.40;
+          this.comboStep = stepIdx + 1;
+        } else {
+          this.comboStep = 0;
+        }
+      }
+      return;
+    }
+
+    // ================= ŞARJLI SPİN SALDIRISI =================
+    if (this.actionState === 'CHARGE_ATTACK') {
+      this.actionTimer += deltaTime;
+      if (this.actionTimer >= 0.28) {
+        this.actionState = 'IDLE';
+      }
+      return;
+    }
+
+    // ================= KAÇIŞ / DODGE ROLL =================
+    if (this.actionState === 'DODGE_ROLL') {
+      this.rollTimer += deltaTime;
+      const forwardX = Math.sin(playerHeading);
+      const forwardZ = Math.cos(playerHeading);
+      const rollSpeed = 9.5 * (1.0 - this.rollTimer / this.ROLL_DURATION);
       this.rootMotionOffset.x = forwardX * rollSpeed * deltaTime;
       this.rootMotionOffset.z = forwardZ * rollSpeed * deltaTime;
 
-      if (this.actionTimer >= this.ROLL_DURATION) {
+      if (this.rollTimer >= this.ROLL_DURATION) {
+        this.actionState = 'IDLE';
         this.isRolling = false;
-        this.actionState = 'IDLE';
-        this.actionTimer = 0;
       }
       return;
     }
 
-    // Attack 1: Slash Right-to-Left (0.36s)
-    if (this.actionState === 'ATTACK_1') {
-      this.actionTimer += deltaTime;
-
-      // Root motion step
-      if (this.actionTimer > 0.08 && this.actionTimer < 0.22) {
-        const forwardX = Math.sin(playerHeading);
-        const forwardZ = Math.cos(playerHeading);
-        this.rootMotionOffset.x = forwardX * 2.8 * deltaTime;
-        this.rootMotionOffset.z = forwardZ * 2.8 * deltaTime;
-      }
-
-      // Hitbox active window at 0.16s
-      if (this.actionTimer >= 0.16 && this.actionTimer - deltaTime < 0.16) {
-        this.checkMeleeHitbox(playerPos, playerHeading, 18, 2.2, Math.PI * 0.55);
-      }
-
-      if (this.actionTimer >= 0.36) {
-        this.actionState = 'IDLE';
-        this.actionTimer = 0;
-        this.comboWindowTimer = 0.35; // 0.35s window to press attack for Strike 2
-      }
-      return;
-    }
-
-    // Attack 2: Slash Left-to-Right (0.38s)
-    if (this.actionState === 'ATTACK_2') {
-      this.actionTimer += deltaTime;
-
-      if (this.actionTimer > 0.08 && this.actionTimer < 0.24) {
-        const forwardX = Math.sin(playerHeading);
-        const forwardZ = Math.cos(playerHeading);
-        this.rootMotionOffset.x = forwardX * 3.4 * deltaTime;
-        this.rootMotionOffset.z = forwardZ * 3.4 * deltaTime;
-      }
-
-      if (this.actionTimer >= 0.18 && this.actionTimer - deltaTime < 0.18) {
-        this.checkMeleeHitbox(playerPos, playerHeading, 24, 2.4, Math.PI * 0.6);
-      }
-
-      if (this.actionTimer >= 0.38) {
-        this.actionState = 'IDLE';
-        this.actionTimer = 0;
-        this.comboWindowTimer = 0.35; // 0.35s window for Strike 3 finisher
-      }
-      return;
-    }
-
-    // Attack 3: Finisher Thrust & Slam (0.52s)
-    if (this.actionState === 'ATTACK_3') {
-      this.actionTimer += deltaTime;
-
-      if (this.actionTimer > 0.12 && this.actionTimer < 0.32) {
-        const forwardX = Math.sin(playerHeading);
-        const forwardZ = Math.cos(playerHeading);
-        this.rootMotionOffset.x = forwardX * 5.2 * deltaTime;
-        this.rootMotionOffset.z = forwardZ * 5.2 * deltaTime;
-      }
-
-      if (this.actionTimer >= 0.25 && this.actionTimer - deltaTime < 0.25) {
-        this.checkMeleeHitbox(playerPos, playerHeading, 42, 2.8, Math.PI * 0.45, true);
-        this.addCameraTrauma(0.5);
-      }
-
-      if (this.actionTimer >= 0.52) {
-        this.actionState = 'IDLE';
-        this.actionTimer = 0;
-        this.comboStep = 0;
-        this.comboWindowTimer = 0;
-      }
-      return;
-    }
-
-    // Charged Spin Attack: 360 Whirlwind (0.65s)
-    if (this.actionState === 'CHARGE_ATTACK') {
-      this.actionTimer += deltaTime;
-
-      if (this.actionTimer >= 0.22 && this.actionTimer - deltaTime < 0.22) {
-        // Full 360 degree 3.5m radius blast
-        this.checkMeleeHitbox(playerPos, playerHeading, 55, 3.5, Math.PI * 2.0, true);
-        this.emitSparksAt(playerPos.clone().add(new Vector3(0, 0.8, 0)), 50);
-        this.addCameraTrauma(0.7);
-      }
-
-      if (this.actionTimer >= 0.65) {
-        this.actionState = 'IDLE';
-        this.actionTimer = 0;
-      }
-      return;
-    }
-
-    // Hurt recovery
-    if (this.actionState === 'HURT') {
-      this.actionTimer += deltaTime;
-      if (this.actionTimer >= 0.32) {
-        this.actionState = 'IDLE';
-        this.actionTimer = 0;
-      }
-      return;
-    }
-
-    // Bow Shoot recovery
-    if (this.actionState === 'BOW_SHOOT') {
-      this.actionTimer += deltaTime;
-      if (this.actionTimer >= 0.3) {
-        this.actionState = 'BOW_AIM';
-        this.actionTimer = 0;
-      }
-      return;
-    }
-
-    // Parry recoil recovery
+    // ================= HURT & PARRY =================
     if (this.actionState === 'PARRY') {
       this.actionTimer += deltaTime;
-      if (this.actionTimer >= 0.35) {
+      if (this.actionTimer >= 0.32) {
         this.actionState = this.isShieldRaised ? 'SHIELD_BLOCK' : 'IDLE';
-        this.actionTimer = 0;
+      }
+      return;
+    }
+
+    if (this.actionState === 'HURT') {
+      this.actionTimer += deltaTime;
+      if (this.actionTimer >= 0.25) {
+        this.actionState = 'IDLE';
       }
       return;
     }
   }
 
   /**
-   * Tests arc hitbox around player and applies damage, knockback, hit-stop, and sparks.
+   * Vuruş Alanı Denetimi: Hasar Türü, Kalkan Kırma, Tepegöz Topuk Zayıflığı ve Direnç Uygulaması
    */
   private checkMeleeHitbox(
     playerPos: Vector3,
     playerHeading: number,
-    damage: number,
+    baseDamage: number,
     maxDist: number,
     maxAngle: number,
-    isKnockback = false
+    isKnockback: boolean,
+    isShieldBreaker = false
   ): void {
     const forwardX = Math.sin(playerHeading);
     const forwardZ = Math.cos(playerHeading);
+    const weaponDef = WEAPON_DEFINITIONS[this.activeWeapon];
 
-    for (const dummy of this.dummies) {
-      const toDummyX = dummy.position.x - playerPos.x;
-      const toDummyZ = dummy.position.z - playerPos.z;
-      const dist = Math.sqrt(toDummyX * toDummyX + toDummyZ * toDummyZ);
+    // 0. Boss Tepegöz'e Vuruş (Gövde ve Faz 2 Topuk Zayıf Noktası)
+    if (this.bossTepegoz && !this.bossTepegoz.isDead) {
+      // Faz 2 Topuk Vuruşu Denetimi
+      if (this.bossTepegoz.checkHeelHit(playerPos, baseDamage)) {
+        this.damageNumbers.spawn(playerPos, Math.round(baseDamage * 1.5), true);
+        this.addCameraTrauma(0.55);
+        this.emitSparksAt(playerPos, 45);
+        return;
+      }
+
+      const dx = this.bossTepegoz.position.x - playerPos.x;
+      const dz = this.bossTepegoz.position.z - playerPos.z;
+      const dist = Math.hypot(dx, dz);
+
+      if (dist <= maxDist + 2.2) {
+        const nx = dx / (dist || 1);
+        const nz = dz / (dist || 1);
+        const dot = forwardX * nx + forwardZ * nz;
+        if (Math.acos(Scalar.Clamp(dot, -1, 1)) <= maxAngle / 2 || dist < 2.5) {
+          const dmg = baseDamage * (isShieldBreaker || weaponDef.isShieldBreaker ? 1.35 : 1.0);
+          this.bossTepegoz.takeDamage(dmg);
+
+          this.scratchDamagePos.copyFrom(this.bossTepegoz.position);
+          this.scratchDamagePos.y += 1.8;
+          this.damageNumbers.spawn(this.scratchDamagePos, Math.round(dmg), isKnockback);
+
+          this.playerHitStopTimer = 0.085;
+          this.addCameraTrauma(isKnockback ? 0.55 : 0.32);
+          this.emitSparksAt(this.scratchDamagePos, isKnockback ? 45 : 26);
+          ProceduralAudio.playImpact(true);
+        }
+      }
+    }
+
+    // Boss Demir Dağ Bekçisi Yakın Dövüş Hasarı
+    if (this.bossDemirDag && !this.bossDemirDag.isDead) {
+      const dx = this.bossDemirDag.position.x - playerPos.x;
+      const dz = this.bossDemirDag.position.z - playerPos.z;
+      const dist = Math.hypot(dx, dz);
+
+      if (dist <= maxDist + 2.5) {
+        const dmg = baseDamage * (isShieldBreaker || weaponDef.isShieldBreaker ? 1.35 : 1.0);
+        const dealt = this.bossDemirDag.takeDamage(dmg, isKnockback);
+
+        this.scratchDamagePos.copyFrom(this.bossDemirDag.position);
+        this.scratchDamagePos.y += 2.0;
+        this.damageNumbers.spawn(this.scratchDamagePos, Math.round(dealt), isKnockback);
+
+        this.playerHitStopTimer = 0.085;
+        this.addCameraTrauma(isKnockback ? 0.55 : 0.32);
+        this.emitSparksAt(this.scratchDamagePos, isKnockback ? 45 : 26);
+      }
+    }
+
+    // Boss Şahmaran Yakın Dövüş Hasarı
+    if (this.bossSahmaran && !this.bossSahmaran.isDead) {
+      const dx = this.bossSahmaran.position.x - playerPos.x;
+      const dz = this.bossSahmaran.position.z - playerPos.z;
+      const dist = Math.hypot(dx, dz);
+
+      if (dist <= maxDist + 2.8) {
+        const dmg = baseDamage * (isShieldBreaker || weaponDef.isShieldBreaker ? 1.35 : 1.0);
+        const dealt = this.bossSahmaran.takeDamage(dmg, isKnockback);
+
+        this.scratchDamagePos.copyFrom(this.bossSahmaran.position);
+        this.scratchDamagePos.y += 2.0;
+        this.damageNumbers.spawn(this.scratchDamagePos, Math.round(dealt), isKnockback);
+
+        this.playerHitStopTimer = 0.085;
+        this.addCameraTrauma(isKnockback ? 0.55 : 0.32);
+        this.emitSparksAt(this.scratchDamagePos, isKnockback ? 45 : 26);
+      }
+    }
+
+    // Boss 7 Başlı Yelbegen Yakın Dövüş Hasarı (Ateş hasarı ve dağlama)
+    if (this.bossYelbegen && !this.bossYelbegen.isDead) {
+      const dx = this.bossYelbegen.position.x - playerPos.x;
+      const dz = this.bossYelbegen.position.z - playerPos.z;
+      const dist = Math.hypot(dx, dz);
+
+      if (dist <= maxDist + 4.5) {
+        const dmg = baseDamage * (isShieldBreaker || weaponDef.isShieldBreaker ? 1.35 : 1.0);
+        const kamPower = KamPowerManager.getInstance();
+        const isFire = (kamPower && kamPower.isFireUnlocked) || weaponDef.damageType === 'FIRE';
+        const dealt = this.bossYelbegen.takeDamage(dmg, isFire);
+
+        this.scratchDamagePos.copyFrom(this.bossYelbegen.position);
+        this.scratchDamagePos.y += 2.5;
+        this.damageNumbers.spawn(this.scratchDamagePos, Math.round(dealt), isKnockback);
+
+        this.playerHitStopTimer = 0.085;
+        this.addCameraTrauma(isKnockback ? 0.55 : 0.35);
+        this.emitSparksAt(this.scratchDamagePos, isFire ? 55 : 30);
+      }
+    }
+
+    // Boss Erlik Han Yakın Dövüş Hasarı
+    if (this.bossErlikHan && !this.bossErlikHan.isDead && this.bossErlikHan.phase !== 'PHASE_3_WEAKENED_CHOICE') {
+      const dx = this.bossErlikHan.position.x - playerPos.x;
+      const dz = this.bossErlikHan.position.z - playerPos.z;
+      const dist = Math.hypot(dx, dz);
+
+      if (dist <= maxDist + 4.0) {
+        const dmg = baseDamage * (isShieldBreaker || weaponDef.isShieldBreaker ? 1.35 : 1.0);
+        const kamPower = KamPowerManager.getInstance();
+        const isFire = (kamPower && kamPower.isFireUnlocked) || weaponDef.damageType === 'FIRE';
+        const dealt = this.bossErlikHan.takeDamage(dmg, isFire);
+
+        this.scratchDamagePos.copyFrom(this.bossErlikHan.position);
+        this.scratchDamagePos.y += 2.0;
+        this.damageNumbers.spawn(this.scratchDamagePos, Math.round(dealt), isKnockback);
+
+        this.playerHitStopTimer = 0.085;
+        this.addCameraTrauma(isKnockback ? 0.55 : 0.35);
+        this.emitSparksAt(this.scratchDamagePos, isFire ? 55 : 30);
+      }
+    }
+
+    // 1. Kara Toteme Vuruş
+    if (this.campManager) {
+      this.campManager.checkDamageTotem(playerPos, maxDist, baseDamage, this.blightManager ?? undefined);
+    }
+
+    // 2. Talim Kuklalarına Vuruş
+    for (let i = 0; i < this.dummies.length; i++) {
+      const dummy = this.dummies[i];
+      const dx = dummy.position.x - playerPos.x;
+      const dz = dummy.position.z - playerPos.z;
+      const dist = Math.hypot(dx, dz);
 
       if (dist <= maxDist) {
-        // Angle test
-        const normX = toDummyX / dist;
-        const normZ = toDummyZ / dist;
-        const dot = forwardX * normX + forwardZ * normZ;
-        const angle = Math.acos(Scalar.Clamp(dot, -1, 1));
+        const nx = dx / dist;
+        const nz = dz / dist;
+        const dot = forwardX * nx + forwardZ * nz;
+        if (Math.acos(Scalar.Clamp(dot, -1, 1)) <= maxAngle / 2) {
+          this.scratchHitNormal.set(nx, 0, nz);
+          dummy.takeDamage(baseDamage, this.scratchHitNormal);
 
-        if (angle <= maxAngle / 2) {
-          // HIT CONFIRMED!
-          dummy.takeDamage(damage, new Vector3(normX, 0, normZ));
-          this.damageNumbers.spawn(dummy.position.clone().add(new Vector3(0, 1.1, 0)), damage, isKnockback);
+          this.scratchDamagePos.copyFrom(dummy.position);
+          this.scratchDamagePos.y += 1.1;
+          this.damageNumbers.spawn(this.scratchDamagePos, baseDamage, isKnockback);
 
-          // Hit-stop micro freeze (75ms)
           this.playerHitStopTimer = 0.075;
-
-          // Camera Shake
           this.addCameraTrauma(isKnockback ? 0.45 : 0.25);
+          this.emitSparksAt(this.scratchDamagePos, isKnockback ? 35 : 20);
+          ProceduralAudio.playImpact(isKnockback);
+        }
+      }
+    }
 
-          // Spark particles
-          const sparkPoint = dummy.position.clone().add(new Vector3(0, 0.9, 0));
-          this.emitSparksAt(sparkPoint, isKnockback ? 35 : 20);
+    // 3. Körmöz Düşmanlarına Vuruş
+    for (let i = 0; i < this.enemies.length; i++) {
+      const enemy = this.enemies[i];
+      if (enemy.isDead) continue;
+
+      const dx = enemy.position.x - playerPos.x;
+      const dz = enemy.position.z - playerPos.z;
+      const dist = Math.hypot(dx, dz);
+
+      if (dist <= maxDist) {
+        const nx = dx / dist;
+        const nz = dz / dist;
+        const dot = forwardX * nx + forwardZ * nz;
+        if (Math.acos(Scalar.Clamp(dot, -1, 1)) <= maxAngle / 2) {
+          this.scratchHitNormal.set(nx, 0, nz);
+          const finalDamage = enemy.takeTypedDamage(
+            baseDamage,
+            weaponDef.damageType,
+            isShieldBreaker || weaponDef.isShieldBreaker,
+            false,
+            this.scratchHitNormal,
+            this.lootManager
+          );
+
+          this.scratchDamagePos.copyFrom(enemy.position);
+          this.scratchDamagePos.y += 1.2;
+          this.damageNumbers.spawn(this.scratchDamagePos, Math.round(finalDamage), isKnockback);
+
+          this.playerHitStopTimer = 0.08;
+          this.addCameraTrauma(isKnockback ? 0.5 : 0.28);
+          this.emitSparksAt(this.scratchDamagePos, isKnockback ? 38 : 22);
+          ProceduralAudio.playImpact(isKnockback);
         }
       }
     }
   }
 
+  /**
+   * Havadan Aşağı Vuruş Patlaması (Plunge Attack Shockwave)
+   */
+  public executePlungeImpact(landingPos: Vector3): void {
+    const shockwaveRadius = 4.8;
+    const plungeDamage = 68;
+
+    this.addCameraTrauma(0.75);
+    this.emitSparksAt(landingPos, 60);
+    ProceduralAudio.playImpact(true);
+
+    if (this.bossTepegoz && !this.bossTepegoz.isDead) {
+      const dist = Vector3.Distance(landingPos, this.bossTepegoz.position);
+      if (dist <= shockwaveRadius + 2.4) {
+        this.bossTepegoz.takeDamage(plungeDamage * 1.6);
+        this.damageNumbers.spawn(this.bossTepegoz.position, Math.round(plungeDamage * 1.6), true);
+      }
+    }
+
+    if (this.bossSahmaran && !this.bossSahmaran.isDead) {
+      const dist = Vector3.Distance(landingPos, this.bossSahmaran.position);
+      if (dist <= shockwaveRadius + 2.8) {
+        this.bossSahmaran.takeDamage(plungeDamage * 1.5, true);
+        this.damageNumbers.spawn(this.bossSahmaran.position, Math.round(plungeDamage * 1.5), true);
+      }
+    }
+
+    if (this.bossYelbegen && !this.bossYelbegen.isDead) {
+      const dist = Vector3.Distance(landingPos, this.bossYelbegen.position);
+      if (dist <= shockwaveRadius + 4.0) {
+        this.bossYelbegen.takeDamage(plungeDamage * 1.5, true);
+        this.damageNumbers.spawn(this.bossYelbegen.position, Math.round(plungeDamage * 1.5), true);
+      }
+    }
+
+    if (this.bossErlikHan && !this.bossErlikHan.isDead && this.bossErlikHan.phase !== 'PHASE_3_WEAKENED_CHOICE') {
+      const dist = Vector3.Distance(landingPos, this.bossErlikHan.position);
+      if (dist <= shockwaveRadius + 3.5) {
+        const kamPower = KamPowerManager.getInstance();
+        const isFire = (kamPower && kamPower.isFireUnlocked);
+        this.bossErlikHan.takeDamage(plungeDamage * 1.5, isFire);
+        this.damageNumbers.spawn(this.bossErlikHan.position, Math.round(plungeDamage * 1.5), true);
+      }
+    }
+
+    if (this.campManager) {
+      this.campManager.checkDamageTotem(landingPos, shockwaveRadius, plungeDamage, this.blightManager ?? undefined);
+    }
+
+    for (let i = 0; i < this.enemies.length; i++) {
+      const enemy = this.enemies[i];
+      if (enemy.isDead) continue;
+      const dist = Vector3.Distance(landingPos, enemy.position);
+      if (dist <= shockwaveRadius) {
+        const dir = enemy.position.subtract(landingPos).normalize();
+        enemy.takeTypedDamage(plungeDamage, 'BLUNT', true, false, dir, this.lootManager);
+        this.damageNumbers.spawn(enemy.position, plungeDamage, true);
+      }
+    }
+
+    for (let i = 0; i < this.dummies.length; i++) {
+      const dummy = this.dummies[i];
+      const dist = Vector3.Distance(landingPos, dummy.position);
+      if (dist <= shockwaveRadius) {
+        const dir = dummy.position.subtract(landingPos).normalize();
+        dummy.takeDamage(plungeDamage, dir);
+        this.damageNumbers.spawn(dummy.position, plungeDamage, true);
+      }
+    }
+  }
+
+  /**
+   * Sessiz Vuruş (Sneak Strike) Hedef Adayı Kontrolü
+   */
+  public checkSneakStrikeCandidate(playerPos: Vector3, playerHeading: number): EnemyEntity | null {
+    for (let i = 0; i < this.enemies.length; i++) {
+      const enemy = this.enemies[i];
+      if (enemy.isDead || enemy.isAware) continue;
+      const dist = Vector3.Distance(playerPos, enemy.position);
+      if (dist < 2.8) {
+        if (enemy.isSleeping) {
+          return enemy;
+        }
+        const forwardEnemyX = Math.sin(enemy.heading);
+        const forwardEnemyZ = Math.cos(enemy.heading);
+        const toPlayerX = playerPos.x - enemy.position.x;
+        const toPlayerZ = playerPos.z - enemy.position.z;
+        const dot = forwardEnemyX * toPlayerX + forwardEnemyZ * toPlayerZ;
+        if (dot < -0.3) {
+          return enemy;
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Sessiz Vuruş (Sneak Strike / Backstab) İnfazı
+   */
+  public triggerSneakStrike(target: EnemyEntity): void {
+    if (this.actionState !== 'IDLE') return;
+
+    this.actionState = 'SNEAK_STRIKE';
+    this.actionTimer = 0;
+    const weaponDef = WEAPON_DEFINITIONS[this.activeWeapon];
+
+    const damageDealt = target.takeTypedDamage(
+      weaponDef.baseDamage,
+      weaponDef.damageType,
+      true,
+      true,
+      undefined,
+      this.lootManager
+    );
+    this.damageNumbers.spawn(target.position, Math.round(damageDealt), true);
+    this.emitSparksAt(target.position, 50);
+    this.addCameraTrauma(0.6);
+  }
+
+  public triggerAttack(isCharged = false): void {
+    if (this.isKutZamaniActive) {
+      this.actionState = 'FLURRY_RUSH';
+      this.flurryStep = 0;
+      this.flurryTimer = 0;
+      this.isFlurryRush = true;
+      ProceduralAudio.playButtonClick();
+      return;
+    }
+
+    if (this.actionState !== 'IDLE') return;
+
+    // Tepegöz diz çökmüş ve canı az ise Basat bitirici vuruşu
+    if (this.bossTepegoz && this.bossTepegoz.phase === 'KNEELING_BLIND') {
+      const dist = Vector3.Distance(this.scratchDamagePos, this.bossTepegoz.position);
+      if (dist < 4.5) {
+        this.bossTepegoz.triggerBasatFinisher();
+        return;
+      }
+    }
+
+    const weaponDef = WEAPON_DEFINITIONS[this.activeWeapon];
+    if (this.stamina < weaponDef.staminaCost) return;
+
+    this.stamina -= weaponDef.staminaCost;
+    this.staminaRegenCooldown = 0.8;
+
+    if (isCharged) {
+      this.executeSpinAttack();
+      return;
+    }
+
+    if (this.activeWeapon === 'BATTLE_AXE') {
+      if (this.comboStep === 0) {
+        this.actionState = 'AXE_ATTACK_1';
+        this.actionTimer = 0;
+        ProceduralAudio.playSwordSwing(2);
+      } else {
+        this.actionState = 'AXE_ATTACK_2';
+        this.actionTimer = 0;
+        ProceduralAudio.playSwordSwing(3);
+      }
+    } else if (this.activeWeapon === 'WAR_SPEAR') {
+      if (this.comboStep === 0) {
+        this.actionState = 'SPEAR_ATTACK_1';
+        this.actionTimer = 0;
+        ProceduralAudio.playSwordSwing(1);
+      } else if (this.comboStep === 1) {
+        this.actionState = 'SPEAR_ATTACK_2';
+        this.actionTimer = 0;
+        ProceduralAudio.playSwordSwing(2);
+      } else {
+        this.actionState = 'SPEAR_ATTACK_3';
+        this.actionTimer = 0;
+        ProceduralAudio.playSwordSwing(3);
+      }
+    } else {
+      if (this.comboStep === 0) {
+        this.actionState = 'ATTACK_1';
+        this.actionTimer = 0;
+        ProceduralAudio.playSwordSwing(1);
+      } else if (this.comboStep === 1) {
+        this.actionState = 'ATTACK_2';
+        this.actionTimer = 0;
+        ProceduralAudio.playSwordSwing(2);
+      } else if (this.comboStep === 2) {
+        this.actionState = 'ATTACK_3';
+        this.actionTimer = 0;
+        ProceduralAudio.playSwordSwing(3);
+      }
+    }
+  }
+
+  public startCharge(): void {
+    if (this.actionState === 'IDLE' && this.stamina >= 25) {
+      this.isCharging = true;
+      this.chargeHoldTime = 0;
+      this.actionState = 'CHARGE_WINDUP';
+      ProceduralAudio.playKutZamaniEnter();
+    }
+  }
+
+  public releaseCharge(): void {
+    if (this.isCharging) {
+      this.isCharging = false;
+      if (this.chargeHoldTime >= this.MIN_CHARGE_TIME) {
+        this.executeSpinAttack();
+      } else {
+        this.actionState = 'IDLE';
+      }
+    }
+  }
+
+  private executeSpinAttack(): void {
+    this.stamina = Math.max(0, this.stamina - 28);
+    this.staminaRegenCooldown = 1.2;
+    this.actionState = 'CHARGE_ATTACK';
+    this.actionTimer = 0;
+    this.addCameraTrauma(0.55);
+    ProceduralAudio.playSwordSwing(3);
+  }
+
+  public triggerDodgeRoll(heading: number): void {
+    if (this.actionState === 'IDLE' && this.stamina >= 14) {
+      this.stamina -= 14;
+      this.staminaRegenCooldown = 0.8;
+      this.isRolling = true;
+      this.rollTimer = 0;
+      this.actionState = 'DODGE_ROLL';
+      ProceduralAudio.playDodgeRoll();
+
+      for (let i = 0; i < this.enemies.length; i++) {
+        const enemy = this.enemies[i];
+        if (enemy.state === 'TELEGRAPH') {
+          this.enterKutZamani();
+          break;
+        }
+      }
+    }
+  }
+
+  public setShieldActive(active: boolean): void {
+    if (active) {
+      this.isShieldRaised = true;
+      this.actionState = 'SHIELD_BLOCK';
+      const hasYerKutu = KamPowerManager.getInstance(this.scene).hasYerKutu;
+      const isWideParryAssist = SettingsStore.get().assistWideParry;
+      this.parryWindowTimer = (hasYerKutu || isWideParryAssist) ? 0.32 : this.PARRY_WINDOW;
+      ProceduralAudio.playShieldBlock();
+    } else {
+      this.isShieldRaised = false;
+      if (this.actionState === 'SHIELD_BLOCK' || this.actionState === 'PARRY') {
+        this.actionState = 'IDLE';
+      }
+    }
+  }
+
+  public triggerKutZamaniManual(): void {
+    this.enterKutZamani();
+  }
+
+  public setBowAim(active: boolean): void {
+    if (active) {
+      this.actionState = 'BOW_AIM';
+      ProceduralAudio.playBowDraw();
+    } else {
+      if (this.actionState === 'BOW_AIM') {
+        this.actionState = 'IDLE';
+        this.isAirborneAim = false;
+      }
+    }
+  }
+
+  public shootArrow(origin: Vector3, direction: Vector3): void {
+    if (this.arrowSystem.shootArrow(origin, direction)) {
+      ProceduralAudio.playBowRelease();
+    }
+  }
+
+  public enterKutZamani(): void {
+    this.isKutZamaniActive = true;
+    this.kutZamaniTimer = this.KUT_ZAMANI_DURATION;
+    ProceduralAudio.playKutZamaniEnter();
+    EventBus.emit('combat:kutzamani_enter');
+
+    const vignette = document.getElementById('kutZamaniVignette');
+    if (vignette) vignette.classList.add('active');
+  }
+
+  public exitKutZamani(): void {
+    this.isKutZamaniActive = false;
+    this.kutZamaniTimer = 0;
+    ProceduralAudio.playKutZamaniExit();
+    EventBus.emit('combat:kutzamani_exit');
+
+    const vignette = document.getElementById('kutZamaniVignette');
+    if (vignette) vignette.classList.remove('active');
+  }
+
+  public toggleLockOn(playerPos: Vector3): void {
+    if (this.lockedTarget) {
+      this.lockedTarget = null;
+    } else {
+      let closestDist = 24.0;
+      let target: { position: Vector3 } | null = null;
+
+      if (this.bossTepegoz && !this.bossTepegoz.isDead) {
+        const bDist = Vector3.Distance(playerPos, this.bossTepegoz.position);
+        if (bDist < 35.0 && bDist < closestDist) {
+          closestDist = bDist;
+          target = this.bossTepegoz;
+        }
+      }
+
+      if (this.bossSahmaran && !this.bossSahmaran.isDead) {
+        const sDist = Vector3.Distance(playerPos, this.bossSahmaran.position);
+        if (sDist < 35.0 && sDist < closestDist) {
+          closestDist = sDist;
+          target = this.bossSahmaran;
+        }
+      }
+
+      if (this.bossYelbegen && !this.bossYelbegen.isDead) {
+        const yDist = Vector3.Distance(playerPos, this.bossYelbegen.position);
+        if (yDist < 38.0 && yDist < closestDist) {
+          closestDist = yDist;
+          target = this.bossYelbegen;
+        }
+      }
+
+      if (this.bossErlikHan && !this.bossErlikHan.isDead && this.bossErlikHan.phase !== 'PHASE_3_WEAKENED_CHOICE') {
+        const eDist = Vector3.Distance(playerPos, this.bossErlikHan.position);
+        if (eDist < 38.0 && eDist < closestDist) {
+          closestDist = eDist;
+          target = this.bossErlikHan;
+        }
+      }
+
+      for (let i = 0; i < this.enemies.length; i++) {
+        const e = this.enemies[i];
+        if (e.isDead) continue;
+        const d = Vector3.Distance(playerPos, e.position);
+        if (d < closestDist) {
+          closestDist = d;
+          target = e;
+        }
+      }
+
+      if (!target) {
+        for (let i = 0; i < this.dummies.length; i++) {
+          const d = this.dummies[i];
+          const dist = Vector3.Distance(playerPos, d.position);
+          if (dist < closestDist) {
+            closestDist = dist;
+            target = d;
+          }
+        }
+      }
+
+      this.lockedTarget = target;
+      if (this.lockedTarget) {
+        ProceduralAudio.playButtonClick();
+      }
+    }
+  }
+
   public dispose(): void {
+    if (this.bossTepegoz) this.bossTepegoz.dispose();
+    if (this.bossDemirDag) this.bossDemirDag.dispose();
+    if (this.bossSahmaran) this.bossSahmaran.dispose();
+    if (this.bossYelbegen) this.bossYelbegen.dispose();
+    if (this.bossErlikHan) this.bossErlikHan.dispose();
+    if (this.campManager) this.campManager.dispose();
+    if (this.blightManager) this.blightManager.dispose();
+    this.lootManager.dispose();
     this.arrowSystem.dispose();
     this.damageNumbers.dispose();
-    for (const d of this.dummies) {
-      d.dispose();
-    }
-    this.dummies = [];
-    if (this.sparkSystem) {
-      this.sparkSystem.dispose();
-    }
+    for (let i = 0; i < this.dummies.length; i++) this.dummies[i].dispose();
+    for (let i = 0; i < this.enemies.length; i++) this.enemies[i].dispose();
+    if (this.sparkSystem) this.sparkSystem.dispose();
     this.sparkEmitter.dispose();
   }
 }

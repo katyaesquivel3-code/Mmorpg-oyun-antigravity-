@@ -1,3 +1,9 @@
+/**
+ * ÖTÜKEN: KUT'UN DÖRT PARÇASI
+ * WebGL2 Oyun Motoru & Sahne Yöneticisi
+ * (Mobil 60 FPS bütçesi, FXAA, Context Lost Yönetimi, Sıfır GC Render Döngüsü)
+ */
+
 import {
   Engine,
   Scene,
@@ -7,8 +13,10 @@ import {
   HemisphericLight,
   DirectionalLight,
   ShadowGenerator,
-  DefaultRenderingPipeline
+  DefaultRenderingPipeline,
+  ScenePerformancePriority
 } from '@babylonjs/core';
+import { SettingsStore } from '../infra/SettingsStore';
 
 export class Game {
   public engine: Engine;
@@ -25,33 +33,47 @@ export class Game {
     }
     this.canvas = canvas;
 
-    // Initialize Babylon WebGL2 Engine with high performance mobile flags
-    this.engine = new Engine(canvas, true, {
+    // Kural 2: antialias=false (FXAA var), adaptToDeviceRatio=false, preserveDrawingBuffer=false, stencil=false
+    this.engine = new Engine(canvas, false, {
       preserveDrawingBuffer: false,
-      stencil: true,
-      antialias: true,
+      stencil: false,
+      antialias: false,
+      adaptToDeviceRatio: false,
       powerPreference: 'high-performance',
       doNotHandleContextLost: false
     });
 
-    // Adaptive Hardware Scaling: crisp rendering while preserving 60 FPS on mobile
-    const dpr = window.devicePixelRatio || 1;
-    this.engine.setHardwareScalingLevel(1 / Math.min(dpr, 1.75));
+    this.applyResolutionScaling();
 
     this.scene = this.createScene();
     this.setupLighting();
     this.setupPostProcessing();
+    this.setupContextLostHandling();
     this.setupResizeHandler();
+    this.applyEngineOptimizations();
+  }
+
+  /**
+   * Çözünürlük: Yatay iç genişliği ~1280 - 1600 px aralığında tutan başlangıç hardwareScalingLevel
+   */
+  public applyResolutionScaling(): void {
+    const dpr = window.devicePixelRatio || 1;
+    const physicalWidth = (window.innerWidth || 1280) * dpr;
+
+    // 1440px referans yatay genişlik (orta segmentte 60 FPS dengesi)
+    const targetWidth = 1440.0;
+    const computedScaling = physicalWidth / targetWidth;
+    const finalScaling = Math.max(0.7, Math.min(1.6, computedScaling));
+
+    this.engine.setHardwareScalingLevel(finalScaling);
     this.engine.resize();
   }
 
   private createScene(): Scene {
     const scene = new Scene(this.engine);
-    // Vibrant Ötüken sky background color (Zelda BotW anime atmosphere)
     scene.clearColor = new Color4(0.42, 0.72, 0.94, 1.0);
     scene.ambientColor = new Color3(0.3, 0.35, 0.45);
 
-    // Subtle atmospheric fog for open-world depth
     scene.fogMode = Scene.FOGMODE_EXP2;
     scene.fogDensity = 0.005;
     scene.fogColor = new Color3(0.55, 0.78, 0.95);
@@ -59,8 +81,17 @@ export class Game {
     return scene;
   }
 
+  /**
+   * Kural 9: scene.skipPointerMovePicking, performancePriority
+   */
+  private applyEngineOptimizations(): void {
+    this.scene.skipPointerMovePicking = true;
+    this.scene.autoClear = false;
+    this.scene.autoClearDepthAndStencil = false;
+    this.scene.performancePriority = ScenePerformancePriority.Aggressive;
+  }
+
   private setupLighting(): void {
-    // Hemispheric ambient light: Sky blue from above, warm steppe soil from below
     const hemiLight = new HemisphericLight(
       'skyHemiLight',
       new Vector3(0, 1, 0),
@@ -70,7 +101,6 @@ export class Game {
     hemiLight.diffuse = new Color3(0.95, 0.98, 1.0);
     hemiLight.groundColor = new Color3(0.38, 0.42, 0.28);
 
-    // Warm directional sun light (Zelda BotW bright afternoon steppe sun)
     const sunLight = new DirectionalLight(
       'sunLight',
       new Vector3(-0.6, -1.2, 0.8).normalize(),
@@ -82,7 +112,7 @@ export class Game {
     sunLight.specular = new Color3(0.8, 0.7, 0.5);
     this.sunLight = sunLight;
 
-    // Mobile-optimized single cascade shadow generator (Rule: Tek cascade gölge)
+    // Mobil bütçesi: Tek cascade gölge, Poisson sampling (1024x1024)
     const shadowGen = new ShadowGenerator(1024, sunLight);
     shadowGen.useContactHardeningShadow = false;
     shadowGen.usePoissonSampling = true;
@@ -92,7 +122,6 @@ export class Game {
   }
 
   private setupPostProcessing(): void {
-    // Post-process: ACES tonemapping, light bloom, FXAA as requested
     const pipeline = new DefaultRenderingPipeline(
       'defaultPipeline',
       true, // HDR
@@ -100,38 +129,56 @@ export class Game {
       this.scene.cameras
     );
 
-    pipeline.samples = 2; // Mobile MSAA
+    // Kural: MSAA yok (samples = 1), yalnızca FXAA
+    pipeline.samples = 1;
     pipeline.fxaaEnabled = true;
 
-    // ACES Tonemapping
     if (pipeline.imageProcessing) {
       pipeline.imageProcessing.toneMappingEnabled = true;
       pipeline.imageProcessing.toneMappingType = 1; // TONEMAPPING_ACES
       pipeline.imageProcessing.contrast = 1.15;
       pipeline.imageProcessing.exposure = 1.1;
       pipeline.imageProcessing.vignetteEnabled = true;
-      pipeline.imageProcessing.vignetteWeight = 1.2;
-      pipeline.imageProcessing.vignetteColor = new Color4(0.05, 0.08, 0.15, 0.4);
+      pipeline.imageProcessing.vignetteWeight = 1.15;
+      pipeline.imageProcessing.vignetteColor = new Color4(0.05, 0.08, 0.15, 0.35);
     }
 
-    // Light atmospheric bloom
     pipeline.bloomEnabled = true;
     pipeline.bloomThreshold = 0.85;
-    pipeline.bloomWeight = 0.25;
+    pipeline.bloomWeight = 0.22;
     pipeline.bloomKernel = 16;
     pipeline.bloomScale = 0.5;
 
     this.pipeline = pipeline;
   }
 
-  private setupResizeHandler(): void {
-    window.addEventListener('resize', () => {
+  private setupContextLostHandling(): void {
+    this.engine.onContextLostObservable.add(() => {
+      console.warn('[Game] WebGL Context Kaybedildi! Sahne donduruluyor...');
+    });
+
+    this.engine.onContextRestoredObservable.add(() => {
+      console.log('[Game] WebGL Context Yenilendi! Sahne tazeleniyor...');
+      this.applyResolutionScaling();
       this.engine.resize();
     });
+  }
+
+  private setupResizeHandler(): void {
+    window.addEventListener('resize', () => {
+      this.applyResolutionScaling();
+    });
+
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', () => {
+        this.applyResolutionScaling();
+      });
+    }
+
     window.addEventListener('orientationchange', () => {
       setTimeout(() => {
-        this.engine.resize();
-      }, 100);
+        this.applyResolutionScaling();
+      }, 120);
     });
   }
 
@@ -149,5 +196,13 @@ export class Game {
 
   public getActiveVertices(): number {
     return this.scene.totalVerticesPerfCounter.current;
+  }
+
+  public getDrawCalls(): number {
+    return (this.scene.getEngine() as any)._drawCalls.current || 0;
+  }
+
+  public getActiveMeshesCount(): number {
+    return this.scene.getActiveMeshes().length;
   }
 }

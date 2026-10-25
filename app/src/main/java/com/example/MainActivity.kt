@@ -46,6 +46,12 @@ class MainActivity : ComponentActivity() {
     // Keep screen awake during gameplay
     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
+    // Notch cutout mode for landscape edge-to-edge
+    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+      window.attributes.layoutInDisplayCutoutMode =
+        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+    }
+
     // Immersive sticky full-screen mode: hides system status and navigation bars
     hideSystemBars()
 

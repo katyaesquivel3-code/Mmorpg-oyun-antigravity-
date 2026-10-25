@@ -1,7 +1,19 @@
+/**
+ * ÖTÜKEN: KUT'UN DÖRT PARÇASI
+ * Dokunmatik Kontrol Yöneticisi (InputManager)
+ * (Floating Joystick sol %40, Pençe Tutuş Köşe Düğmeleri, Sağ Başparmak Kümesi, Çömelme, Silah/Ok Değişimi & İvmeli Kamera)
+ */
+
+import { ProceduralAudio } from '../audio/ProceduralAudio';
+import { HapticsManager } from '../infra/HapticsManager';
+import { SettingsStore } from '../infra/SettingsStore';
+import { WeaponType } from '../combat/WeaponData';
+import { EventBus } from '../infra/EventBus';
+
 export interface MovementInput {
-  x: number;       // -1.0 (left) to +1.0 (right)
-  y: number;       // -1.0 (backward) to +1.0 (forward)
-  magnitude: number; // 0.0 to 1.0
+  x: number;
+  y: number;
+  magnitude: number;
   isRunRequested: boolean;
 }
 
@@ -10,50 +22,58 @@ export interface CombatInputCallbacks {
   onChargeStart: () => void;
   onChargeRelease: () => void;
   onDodgeRoll: () => void;
+  onJump?: () => void;
+  onCrouchToggle?: () => void;
+  onWeaponSwitch?: (type?: WeaponType) => void;
+  onArrowSwitch?: () => void;
+  onSneakStrike?: () => void;
   onShield: (active: boolean) => void;
   onBowAimToggle: () => void;
   onBowShoot: () => void;
   onLockOnToggle: () => void;
+  onPowerCast?: () => void;
+  onMapToggle?: () => void;
+  onMenuToggle?: () => void;
 }
 
 export class InputManager {
   public moveInput: MovementInput = { x: 0, y: 0, magnitude: 0, isRunRequested: false };
-
-  // Camera Orbit Delta
   public lookDelta = { x: 0, y: 0 };
+  private consumedLookDelta = { x: 0, y: 0 };
 
-  // Touch tracking IDs
-  private joystickTouchId: number | null = null;
-  private cameraTouchId: number | null = null;
+  // Pointer IDs
+  private joystickPointerId: number | null = null;
+  private cameraPointerId: number | null = null;
 
-  // Joystick DOM elements & math
+  // Floating Joystick
   private joystickZone: HTMLElement | null = null;
   private joystickBase: HTMLElement | null = null;
   private joystickThumb: HTMLElement | null = null;
   private joystickCenter = { x: 0, y: 0 };
-  private maxRadius = 38;
+  private readonly maxRadius = 48.0;
 
-  // Camera touch state
-  private lastCameraTouchPos = { x: 0, y: 0 };
+  // Kamera Sürükleme & İvmelenme
+  private lastCameraPos = { x: 0, y: 0 };
+  private cameraVelocity = { x: 0, y: 0 };
 
-  // Keyboard state
+  // Klavye & Gamepad
   private keys: { [key: string]: boolean } = {};
   private prevKeys: { [key: string]: boolean } = {};
+  private prevGpButtons: boolean[] = [];
 
-  // Attack button hold timer for charge attack
+  // Saldırı Şarj Sayacı
   private attackPressTimer: number | null = null;
   private isChargeTriggered = false;
 
-  // Combat Callbacks
+  // Pençe Tutuş Yay (Tut = Nişan, Bırak = At)
+  private isClawBowAiming = false;
+
   public callbacks: CombatInputCallbacks | null = null;
 
-  // Gamepad edge detectors
-  private prevGpButtons: boolean[] = [];
-
   constructor() {
-    this.initJoystickDOM();
-    this.initCameraTouchDOM();
-    this.initCombatActionDOM();
+    this.initFloatingJoystick();
+    this.initCameraSwipe();
+    this.initClawAndThumbButtons();
     this.initKeyboard();
     this.initGamepad();
   }
@@ -62,54 +82,70 @@ export class InputManager {
     this.callbacks = cbs;
   }
 
-  private initJoystickDOM(): void {
+  /**
+   * Kural 4: Floating Joystick (Sol %40 ekran, dokunulan yerde belirir, uca itilince otomatik sprint)
+   */
+  private initFloatingJoystick(): void {
     this.joystickZone = document.getElementById('joystickZone');
     this.joystickBase = document.getElementById('joystickBase');
     this.joystickThumb = document.getElementById('joystickThumb');
 
     if (!this.joystickZone || !this.joystickBase || !this.joystickThumb) return;
 
-    this.joystickZone.addEventListener('touchstart', (e: TouchEvent) => {
+    this.joystickZone.addEventListener('pointerdown', (e: PointerEvent) => {
       e.preventDefault();
-      if (this.joystickTouchId !== null) return;
+      e.stopPropagation();
+      ProceduralAudio.init();
 
-      const touch = e.changedTouches[0];
-      this.joystickTouchId = touch.identifier;
+      if (this.joystickPointerId !== null) return;
 
-      const rect = this.joystickBase!.getBoundingClientRect();
-      this.joystickCenter = {
-        x: rect.left + rect.width / 2,
-        y: rect.top + rect.height / 2
-      };
+      const isLeftHand = SettingsStore.get().leftHandMode;
+      const screenW = window.innerWidth;
+      const inZone = !isLeftHand ? e.clientX < screenW * 0.45 : e.clientX > screenW * 0.55;
+      if (!inZone) return;
 
-      this.handleJoystickMove(touch.clientX, touch.clientY);
+      this.joystickPointerId = e.pointerId;
+
+      try {
+        this.joystickZone!.setPointerCapture(e.pointerId);
+      } catch {
+        // Fallback
+      }
+
+      this.joystickCenter.x = e.clientX;
+      this.joystickCenter.y = e.clientY;
+
+      this.joystickBase!.style.left = `${e.clientX}px`;
+      this.joystickBase!.style.top = `${e.clientY}px`;
+      this.joystickBase!.style.opacity = '1';
+      this.joystickThumb!.style.transform = 'translate(-50%, -50%)';
+
+      this.handleJoystickMove(e.clientX, e.clientY);
     }, { passive: false });
 
-    window.addEventListener('touchmove', (e: TouchEvent) => {
-      if (this.joystickTouchId === null) return;
-      for (let i = 0; i < e.changedTouches.length; i++) {
-        const touch = e.changedTouches[i];
-        if (touch.identifier === this.joystickTouchId) {
-          e.preventDefault();
-          this.handleJoystickMove(touch.clientX, touch.clientY);
-          break;
-        }
+    this.joystickZone.addEventListener('pointermove', (e: PointerEvent) => {
+      if (this.joystickPointerId === e.pointerId) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.handleJoystickMove(e.clientX, e.clientY);
       }
     }, { passive: false });
 
-    const endJoystick = (e: TouchEvent) => {
-      if (this.joystickTouchId === null) return;
-      for (let i = 0; i < e.changedTouches.length; i++) {
-        if (e.changedTouches[i].identifier === this.joystickTouchId) {
-          this.joystickTouchId = null;
-          this.resetJoystick();
-          break;
+    const endJoystick = (e: PointerEvent) => {
+      if (this.joystickPointerId === e.pointerId) {
+        e.preventDefault();
+        try {
+          this.joystickZone!.releasePointerCapture(e.pointerId);
+        } catch {
+          // Fallback
         }
+        this.joystickPointerId = null;
+        this.resetJoystick();
       }
     };
 
-    window.addEventListener('touchend', endJoystick, { passive: true });
-    window.addEventListener('touchcancel', endJoystick, { passive: true });
+    this.joystickZone.addEventListener('pointerup', endJoystick, { passive: false });
+    this.joystickZone.addEventListener('pointercancel', endJoystick, { passive: false });
   }
 
   private handleJoystickMove(clientX: number, clientY: number): void {
@@ -136,15 +172,18 @@ export class InputManager {
       this.moveInput.magnitude = 0;
       this.moveInput.isRunRequested = false;
     } else {
-      const activeRange = (normDist - deadzone) / (1 - deadzone);
+      const activeRange = (normDist - deadzone) / (1.0 - deadzone);
       this.moveInput.x = Math.cos(angle) * activeRange;
       this.moveInput.y = -Math.sin(angle) * activeRange;
       this.moveInput.magnitude = activeRange;
-      this.moveInput.isRunRequested = activeRange > 0.65;
+      this.moveInput.isRunRequested = normDist > 0.85;
     }
   }
 
   private resetJoystick(): void {
+    if (this.joystickBase) {
+      this.joystickBase.style.opacity = '0.4';
+    }
     if (this.joystickThumb) {
       this.joystickThumb.style.transform = 'translate(-50%, -50%)';
     }
@@ -154,69 +193,123 @@ export class InputManager {
     this.moveInput.isRunRequested = false;
   }
 
-  private initCameraTouchDOM(): void {
+  /**
+   * Kural 4: Sağ yarı bağımsız ivmeli kamera sürükleme
+   */
+  private initCameraSwipe(): void {
     const lookArea = document.getElementById('touchLookArea');
     if (!lookArea) return;
 
-    lookArea.addEventListener('touchstart', (e: TouchEvent) => {
-      if (this.cameraTouchId !== null) return;
-      const touch = e.changedTouches[0];
-      this.cameraTouchId = touch.identifier;
-      this.lastCameraTouchPos = { x: touch.clientX, y: touch.clientY };
-    }, { passive: true });
+    lookArea.addEventListener('pointerdown', (e: PointerEvent) => {
+      ProceduralAudio.init();
+      if (this.cameraPointerId !== null) return;
 
-    window.addEventListener('touchmove', (e: TouchEvent) => {
-      if (this.cameraTouchId === null) return;
-      for (let i = 0; i < e.changedTouches.length; i++) {
-        const touch = e.changedTouches[i];
-        if (touch.identifier === this.cameraTouchId) {
-          const dx = touch.clientX - this.lastCameraTouchPos.x;
-          const dy = touch.clientY - this.lastCameraTouchPos.y;
+      this.cameraPointerId = e.pointerId;
+      this.lastCameraPos.x = e.clientX;
+      this.lastCameraPos.y = e.clientY;
+      this.cameraVelocity.x = 0;
+      this.cameraVelocity.y = 0;
 
-          this.lookDelta.x += dx;
-          this.lookDelta.y += dy;
-
-          this.lastCameraTouchPos = { x: touch.clientX, y: touch.clientY };
-          break;
-        }
+      try {
+        lookArea.setPointerCapture(e.pointerId);
+      } catch {
+        // Fallback
       }
     }, { passive: true });
 
-    const endCamera = (e: TouchEvent) => {
-      if (this.cameraTouchId === null) return;
-      for (let i = 0; i < e.changedTouches.length; i++) {
-        if (e.changedTouches[i].identifier === this.cameraTouchId) {
-          this.cameraTouchId = null;
-          break;
+    lookArea.addEventListener('pointermove', (e: PointerEvent) => {
+      if (this.cameraPointerId === e.pointerId) {
+        const dx = e.clientX - this.lastCameraPos.x;
+        const dy = e.clientY - this.lastCameraPos.y;
+
+        const sens = SettingsStore.get().cameraSensitivity;
+        this.lookDelta.x += dx * sens;
+        this.lookDelta.y += dy * sens;
+
+        this.cameraVelocity.x = dx;
+        this.cameraVelocity.y = dy;
+
+        this.lastCameraPos.x = e.clientX;
+        this.lastCameraPos.y = e.clientY;
+      }
+    }, { passive: true });
+
+    const endCamera = (e: PointerEvent) => {
+      if (this.cameraPointerId === e.pointerId) {
+        try {
+          lookArea.releasePointerCapture(e.pointerId);
+        } catch {
+          // Fallback
         }
+        this.cameraPointerId = null;
       }
     };
 
-    window.addEventListener('touchend', endCamera, { passive: true });
-    window.addEventListener('touchcancel', endCamera, { passive: true });
+    lookArea.addEventListener('pointerup', endCamera, { passive: true });
+    lookArea.addEventListener('pointercancel', endCamera, { passive: true });
   }
 
   /**
-   * Initializes BotW Diamond Combat Buttons: Attack, Roll, Shield, Bow, Lock-on
+   * Kural 4: Pençe Tutuş Omuz Düğmeleri & Sağ Başparmak Kümesi
    */
-  private initCombatActionDOM(): void {
-    const attackBtn = document.getElementById('btnAttack');
-    const rollBtn = document.getElementById('btnRoll');
-    const shieldBtn = document.getElementById('btnShield');
-    const bowBtn = document.getElementById('btnBow');
-    const lockBtn = document.getElementById('btnLockOn');
-
-    // 1. Attack / Charge Button
-    if (attackBtn) {
-      const startAttack = (e: Event) => {
+  private initClawAndThumbButtons(): void {
+    // 1. Pençe Sol Üst: Kalkan
+    const clawShield = document.getElementById('btnClawShield');
+    if (clawShield) {
+      clawShield.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         e.stopPropagation();
+        ProceduralAudio.init();
+        HapticsManager.buttonTap();
+        this.callbacks?.onShield(true);
+      });
+      const endShield = (e: Event) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.callbacks?.onShield(false);
+      };
+      clawShield.addEventListener('pointerup', endShield);
+      clawShield.addEventListener('pointercancel', endShield);
+    }
+
+    // 2. Pençe Sağ Üst: Yay
+    const clawBow = document.getElementById('btnClawBow');
+    if (clawBow) {
+      clawBow.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        ProceduralAudio.init();
+        HapticsManager.buttonTap();
+        this.isClawBowAiming = true;
+        this.callbacks?.onBowAimToggle();
+      });
+      const endBow = (e: Event) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (this.isClawBowAiming) {
+          this.isClawBowAiming = false;
+          this.callbacks?.onBowShoot();
+        }
+      };
+      clawBow.addEventListener('pointerup', endBow);
+      clawBow.addEventListener('pointercancel', endBow);
+    }
+
+    // 3. Sağ Başparmak: Büyük Saldırı
+    const attackBtn = document.getElementById('btnAttack');
+    if (attackBtn) {
+      attackBtn.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        ProceduralAudio.init();
+        HapticsManager.buttonTap();
         this.isChargeTriggered = false;
+
         this.attackPressTimer = window.setTimeout(() => {
           this.isChargeTriggered = true;
           this.callbacks?.onChargeStart();
-        }, 320); // 320ms hold begins charge windup
-      };
+        }, 320);
+      });
 
       const endAttack = (e: Event) => {
         e.preventDefault();
@@ -234,77 +327,127 @@ export class InputManager {
         this.isChargeTriggered = false;
       };
 
-      attackBtn.addEventListener('touchstart', startAttack, { passive: false });
-      attackBtn.addEventListener('touchend', endAttack, { passive: false });
-      attackBtn.addEventListener('mousedown', startAttack);
-      attackBtn.addEventListener('mouseup', endAttack);
+      attackBtn.addEventListener('pointerup', endAttack);
+      attackBtn.addEventListener('pointercancel', endAttack);
     }
 
-    // 2. Dodge Roll Button
+    // 4. Roll (Kaçış)
+    const rollBtn = document.getElementById('btnRoll');
     if (rollBtn) {
-      const handleRoll = (e: Event) => {
+      rollBtn.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         e.stopPropagation();
+        ProceduralAudio.init();
+        HapticsManager.dodgeRoll();
         this.callbacks?.onDodgeRoll();
-      };
-      rollBtn.addEventListener('touchstart', handleRoll, { passive: false });
-      rollBtn.addEventListener('mousedown', handleRoll);
+      });
     }
 
-    // 3. Shield & Parry Button (Hold to Block, Tap for Parry)
-    if (shieldBtn) {
-      const raiseShield = (e: Event) => {
+    // 5. Zıpla (Jump)
+    const jumpBtn = document.getElementById('btnJump');
+    if (jumpBtn) {
+      jumpBtn.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        this.callbacks?.onShield(true);
-      };
-
-      const lowerShield = (e: Event) => {
-        e.preventDefault();
-        e.stopPropagation();
-        this.callbacks?.onShield(false);
-      };
-
-      shieldBtn.addEventListener('touchstart', raiseShield, { passive: false });
-      shieldBtn.addEventListener('touchend', lowerShield, { passive: false });
-      shieldBtn.addEventListener('mousedown', raiseShield);
-      shieldBtn.addEventListener('mouseup', lowerShield);
+        ProceduralAudio.init();
+        HapticsManager.buttonTap();
+        this.callbacks?.onJump?.();
+      });
     }
 
-    // 4. Bow Aim / Shoot Button
-    if (bowBtn) {
-      const handleBow = (e: Event) => {
+    // 6. Çömelme / Gizlilik (Crouch)
+    const crouchBtn = document.getElementById('btnCrouch');
+    if (crouchBtn) {
+      crouchBtn.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        this.callbacks?.onBowAimToggle();
-      };
-      bowBtn.addEventListener('touchstart', handleBow, { passive: false });
-      bowBtn.addEventListener('mousedown', handleBow);
+        ProceduralAudio.init();
+        HapticsManager.buttonTap();
+        this.callbacks?.onCrouchToggle?.();
+      });
     }
 
-    // 5. Lock-On Target Button
+    // 7. Silah Değiştirme
+    const weaponBtn = document.getElementById('btnWeaponSwitch');
+    if (weaponBtn) {
+      weaponBtn.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        ProceduralAudio.init();
+        HapticsManager.buttonTap();
+        this.callbacks?.onWeaponSwitch?.();
+      });
+    }
+
+    // 8. Ok Değiştirme
+    const arrowBtn = document.getElementById('btnArrowSwitch');
+    if (arrowBtn) {
+      arrowBtn.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        ProceduralAudio.init();
+        HapticsManager.buttonTap();
+        this.callbacks?.onArrowSwitch?.();
+      });
+    }
+
+    // 9. Sessiz Vuruş (Sneak Strike)
+    const sneakBtn = document.getElementById('btnSneakStrike');
+    if (sneakBtn) {
+      sneakBtn.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        ProceduralAudio.init();
+        HapticsManager.criticalHit();
+        this.callbacks?.onSneakStrike?.();
+      });
+    }
+
+    // 10. Kilitlenme
+    const lockBtn = document.getElementById('btnLockOn');
     if (lockBtn) {
-      const handleLock = (e: Event) => {
+      lockBtn.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         e.stopPropagation();
+        ProceduralAudio.init();
+        HapticsManager.buttonTap();
         this.callbacks?.onLockOnToggle();
-      };
-      lockBtn.addEventListener('touchstart', handleLock, { passive: false });
-      lockBtn.addEventListener('mousedown', handleLock);
+      });
     }
   }
 
   private initKeyboard(): void {
     window.addEventListener('keydown', (e) => {
+      ProceduralAudio.init();
       const k = e.key.toLowerCase();
       this.keys[k] = true;
 
-      // Combat Hotkeys
       if (k === 'j' && !this.prevKeys['j']) {
         this.callbacks?.onAttack(false);
       }
-      if ((k === ' ' || k === 'k') && !this.prevKeys[k]) {
+      if (k === 'k' && !this.prevKeys['k']) {
         this.callbacks?.onDodgeRoll();
+      }
+      if (k === ' ' && !this.prevKeys[' ']) {
+        this.callbacks?.onJump?.();
+      }
+      if (k === 'c' && !this.prevKeys['c']) {
+        this.callbacks?.onCrouchToggle?.();
+      }
+      if (k === '1' && !this.prevKeys['1']) {
+        this.callbacks?.onWeaponSwitch?.('KAM_SWORD');
+      }
+      if (k === '2' && !this.prevKeys['2']) {
+        this.callbacks?.onWeaponSwitch?.('BATTLE_AXE');
+      }
+      if (k === '3' && !this.prevKeys['3']) {
+        this.callbacks?.onWeaponSwitch?.('WAR_SPEAR');
+      }
+      if (k === 'r' && !this.prevKeys['r']) {
+        this.callbacks?.onArrowSwitch?.();
+      }
+      if (k === 'e' && !this.prevKeys['e']) {
+        this.callbacks?.onSneakStrike?.();
       }
       if (k === 'l') {
         this.callbacks?.onShield(true);
@@ -328,109 +471,107 @@ export class InputManager {
         this.callbacks?.onShield(false);
       }
     });
-
-    // Mouse Controls (Left click attack, Right click shield)
-    window.addEventListener('mousedown', (e) => {
-      if (e.target !== document.getElementById('touchLookArea') && e.target !== document.getElementById('gameCanvas')) return;
-      if (e.button === 0) {
-        this.callbacks?.onAttack(false);
-      } else if (e.button === 2) {
-        this.callbacks?.onShield(true);
-      }
-    });
-
-    window.addEventListener('mouseup', (e) => {
-      if (e.button === 2) {
-        this.callbacks?.onShield(false);
-      }
-    });
-
-    window.addEventListener('contextmenu', (e) => {
-      e.preventDefault(); // Prevent browser context menu during combat right-clicks
-    });
   }
 
   private initGamepad(): void {
     window.addEventListener('gamepadconnected', () => {
-      console.log('Gamepad connected for Ötüken');
+      console.log('[InputManager] Gamepad bağlandı.');
     });
   }
 
   public consumeLookDelta(): { x: number; y: number } {
-    const d = { x: this.lookDelta.x, y: this.lookDelta.y };
+    this.consumedLookDelta.x = this.lookDelta.x;
+    this.consumedLookDelta.y = this.lookDelta.y;
     this.lookDelta.x = 0;
     this.lookDelta.y = 0;
-    return d;
+    return this.consumedLookDelta;
   }
 
   public poll(deltaTime: number): MovementInput {
-    // 1. Check Gamepad
     const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
     const gp = gamepads[0];
     if (gp) {
-      // Left stick for movement
       const leftX = gp.axes[0] || 0;
       const leftY = -gp.axes[1] || 0;
-      const dist = Math.sqrt(leftX * leftX + leftY * leftY);
 
-      // Right stick for camera orbit
       const rightX = gp.axes[2] || 0;
       const rightY = gp.axes[3] || 0;
       if (Math.abs(rightX) > 0.15 || Math.abs(rightY) > 0.15) {
-        this.lookDelta.x += rightX * 300 * deltaTime;
-        this.lookDelta.y += rightY * 200 * deltaTime;
+        this.lookDelta.x += rightX * 320 * deltaTime;
+        this.lookDelta.y += rightY * 220 * deltaTime;
       }
 
-      // Gamepad Combat Buttons
-      // X / Button 2: Attack
       const btnAttack = gp.buttons[2]?.pressed || false;
       if (btnAttack && !this.prevGpButtons[2]) {
         this.callbacks?.onAttack(false);
       }
 
-      // A or B / Button 0 or 1: Dodge Roll
-      const btnRoll = gp.buttons[1]?.pressed || gp.buttons[0]?.pressed || false;
+      const btnRoll = gp.buttons[1]?.pressed || false;
       if (btnRoll && !this.prevGpButtons[1]) {
         this.callbacks?.onDodgeRoll();
       }
 
-      // LB / Button 4: Shield
+      const btnJump = gp.buttons[0]?.pressed || false;
+      if (btnJump && !this.prevGpButtons[0]) {
+        this.callbacks?.onJump?.();
+      }
+
       const btnShield = gp.buttons[4]?.pressed || false;
       if (btnShield !== this.prevGpButtons[4]) {
         this.callbacks?.onShield(btnShield);
       }
 
-      // RT / Button 7: Bow Aim/Shoot
-      const btnBow = gp.buttons[7]?.pressed || false;
-      if (btnBow && !this.prevGpButtons[7]) {
-        this.callbacks?.onBowAimToggle();
+      const btnBow = gp.buttons[5]?.pressed || false;
+      if (btnBow !== this.prevGpButtons[5]) {
+        if (btnBow) this.callbacks?.onBowAimToggle();
+        else this.callbacks?.onBowShoot();
       }
 
-      // R3 / Button 11: Lock-On Toggle
-      const btnLock = gp.buttons[11]?.pressed || false;
-      if (btnLock && !this.prevGpButtons[11]) {
-        this.callbacks?.onLockOnToggle();
+      // Button 3 (Y / Triangle): Kam Gücü Kullanımı
+      const btnPower = gp.buttons[3]?.pressed || false;
+      if (btnPower && !this.prevGpButtons[3]) {
+        this.callbacks?.onPowerCast?.();
+      }
+
+      // Button 8 (Select / Share): Harita Aç/Kapat
+      const btnSelect = gp.buttons[8]?.pressed || false;
+      if (btnSelect && !this.prevGpButtons[8]) {
+        EventBus.emit('map:open');
+      }
+
+      // Button 9 (Start / Options): Duraklat / Ayarlar Menüsü
+      const btnStart = gp.buttons[9]?.pressed || false;
+      if (btnStart && !this.prevGpButtons[9]) {
+        EventBus.emit('ui:settings_open');
+      }
+
+      // D-Pad: D-Pad Sol (Ateş), D-Pad Yukarı (Rüzgâr), D-Pad Sağ (Kut Zamanı)
+      if (gp.buttons[14]?.pressed && !this.prevGpButtons[14]) {
+        EventBus.emit('power:change', { power: 'FIRE' });
+      }
+      if (gp.buttons[12]?.pressed && !this.prevGpButtons[12]) {
+        EventBus.emit('power:change', { power: 'WIND' });
+      }
+      if (gp.buttons[15]?.pressed && !this.prevGpButtons[15]) {
+        EventBus.emit('power:change', { power: 'KUT_TIME' });
       }
 
       for (let i = 0; i < gp.buttons.length; i++) {
-        this.prevGpButtons[i] = gp.buttons[i]?.pressed || false;
+        this.prevGpButtons[i] = gp.buttons[i].pressed;
       }
 
+      const dist = Math.hypot(leftX, leftY);
       if (dist > 0.15) {
         return {
           x: leftX,
           y: leftY,
           magnitude: Math.min(1.0, dist),
-          isRunRequested: dist > 0.7 || gp.buttons[10]?.pressed || false
+          isRunRequested: dist > 0.88
         };
       }
     }
 
-    if (this.joystickTouchId !== null) {
-      return this.moveInput;
-    }
-
-    // Keyboard Movement
+    // Klavye Girişi (WASD)
     let kx = 0;
     let ky = 0;
     if (this.keys['w'] || this.keys['arrowup']) ky += 1;
@@ -438,17 +579,13 @@ export class InputManager {
     if (this.keys['a'] || this.keys['arrowleft']) kx -= 1;
     if (this.keys['d'] || this.keys['arrowright']) kx += 1;
 
-    // Keyboard Camera keys
-    if (this.keys['arrowleft']) this.lookDelta.x -= 200 * deltaTime;
-    if (this.keys['arrowright']) this.lookDelta.x += 200 * deltaTime;
-
-    const mag = Math.sqrt(kx * kx + ky * ky);
-    if (mag > 0.01) {
-      const isShift = this.keys['shift'] || false;
+    if (kx !== 0 || ky !== 0) {
+      const len = Math.hypot(kx, ky);
+      const isShift = !!(this.keys['shift']);
       return {
-        x: kx / mag,
-        y: ky / mag,
-        magnitude: isShift ? 1.0 : 0.5,
+        x: kx / len,
+        y: ky / len,
+        magnitude: 1.0,
         isRunRequested: isShift
       };
     }

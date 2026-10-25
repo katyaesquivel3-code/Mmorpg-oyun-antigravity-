@@ -1,3 +1,9 @@
+/**
+ * ÖTÜKEN: KUT'UN DÖRT PARÇASI
+ * Arazi Parçası (Terrain Chunk) & Çok Kademeli LOD Sistemi
+ * (64x64m Boyut, 4 Kademeli LOD + Etek / Skirt, Dikişsiz Geçiş & Sıfır GC)
+ */
+
 import {
   Mesh,
   Scene,
@@ -7,7 +13,7 @@ import {
 } from '@babylonjs/core';
 import { WorldNoise, BiomeData } from './WorldNoise';
 
-export type ChunkLOD = 0 | 1 | 2;
+export type ChunkLOD = 0 | 1 | 2 | 3;
 
 export class Chunk {
   public key: string;
@@ -24,7 +30,7 @@ export class Chunk {
   private noise: WorldNoise;
   private material: StandardMaterial;
 
-  public static readonly CHUNK_SIZE = 64; // 64x64m
+  public static readonly CHUNK_SIZE = 64; // 64x64 metre
 
   constructor(
     cx: number,
@@ -50,16 +56,14 @@ export class Chunk {
   }
 
   private buildMesh(): void {
-    const sub = this.lod === 0 ? 24 : this.lod === 1 ? 14 : 8;
+    // LOD 0 = 24 alt bölüm, LOD 1 = 14, LOD 2 = 8, LOD 3 = 4 alt bölüm
+    const sub = this.lod === 0 ? 24 : this.lod === 1 ? 14 : this.lod === 2 ? 8 : 4;
     const size = Chunk.CHUNK_SIZE;
     const startX = this.cx * size;
     const startZ = this.cz * size;
     const step = size / sub;
 
-    // Grid vertices: (sub + 1) * (sub + 1)
     const gridVerts = (sub + 1) * (sub + 1);
-
-    // Skirt vertices along the 4 borders: 4 * (sub + 1)
     const skirtVerts = 4 * (sub + 1);
     const totalVerts = gridVerts + skirtVerts;
 
@@ -73,7 +77,7 @@ export class Chunk {
     let uvIdx = 0;
     let cIdx = 0;
 
-    // 1. Generate main grid surface
+    // 1. Ana Yüzey Izgarası Üretimi
     for (let z = 0; z <= sub; z++) {
       for (let x = 0; x <= sub; x++) {
         const wx = startX + x * step;
@@ -91,17 +95,16 @@ export class Chunk {
         uvs[uvIdx + 1] = z / sub;
         uvIdx += 2;
 
-        // Slope calculation: 1.0 - Ny (0 for flat surface, 1 for vertical cliff)
-        const slope = Math.max(0, Math.min(1, 1.0 - normal[1]));
-
-        // Color blending: Grassy meadow -> rocky slope / iron cliff
+        // Eğim Faktörü: 1.0 - NormalY
+        const slope = Math.max(0, Math.min(1.0, 1.0 - normal[1]));
         const rockFactor = Math.pow(slope, 1.4);
-        const r = biome.grassColor[0] * (1 - rockFactor) + biome.rockColor[0] * rockFactor;
-        const g = biome.grassColor[1] * (1 - rockFactor) + biome.rockColor[1] * rockFactor;
-        const b = biome.grassColor[2] * (1 - rockFactor) + biome.rockColor[2] * rockFactor;
 
-        // Subtle ambient occlusion / valley shading
-        const ao = Math.min(1.0, Math.max(0.7, (wy + 4.0) / 16.0));
+        const r = biome.grassColor[0] * (1.0 - rockFactor) + biome.rockColor[0] * rockFactor;
+        const g = biome.grassColor[1] * (1.0 - rockFactor) + biome.rockColor[1] * rockFactor;
+        const b = biome.grassColor[2] * (1.0 - rockFactor) + biome.rockColor[2] * rockFactor;
+
+        // Vadi Gölgelendirmesi (Doğal Ortam Kapanması - AO)
+        const ao = Math.min(1.0, Math.max(0.68, (wy + 4.0) / 16.0));
 
         colors[cIdx] = r * ao;
         colors[cIdx + 1] = g * ao;
@@ -111,7 +114,7 @@ export class Chunk {
       }
     }
 
-    // Main grid indices
+    // Ana Izgara İndeksleri
     for (let z = 0; z < sub; z++) {
       for (let x = 0; x < sub; x++) {
         const row1 = z * (sub + 1) + x;
@@ -122,12 +125,12 @@ export class Chunk {
       }
     }
 
-    // 2. Generate Skirt Vertices (Drops outer edge down by 2.5m to eliminate LOD gaps)
-    const skirtDrop = 2.5;
+    // 2. Etek (Skirt) Üretimi — Farklı LOD seviyeleri arasındaki boşlukları ve dikişleri kapatır
+    const skirtDrop = 3.0;
     const skirtBaseIndex = gridVerts;
     let sIdx = 0;
 
-    // South border (z = 0)
+    // Güney Kenar (z = 0)
     for (let x = 0; x <= sub; x++) {
       const topIdx = x;
       positions[vIdx] = positions[topIdx * 3];
@@ -156,7 +159,7 @@ export class Chunk {
       sIdx++;
     }
 
-    // North border (z = sub)
+    // Kuzey Kenar (z = sub)
     const northRowStart = sub * (sub + 1);
     for (let x = 0; x <= sub; x++) {
       const topIdx = northRowStart + x;
@@ -186,7 +189,7 @@ export class Chunk {
       sIdx++;
     }
 
-    // Compute normals mathematically from triangle positions
+    // Normalleri hesapla
     VertexData.ComputeNormals(positions, indices, normals);
 
     const vertexData = new VertexData();

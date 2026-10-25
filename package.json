@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "test": "node test_faz6.mjs && node test_faz7.mjs && node test_faz8.mjs && node test_faz9.mjs && node test_faz10.mjs && node test_faz11.mjs && node test_faz12.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
